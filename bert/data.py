@@ -1,20 +1,19 @@
 import sys
+
 sys.path.append("..")
-import os, argparse, datetime, time, re, collections
-from tqdm import tqdm, trange
+import os, argparse
+from tqdm import tqdm
 import json
-from random import random, randrange, randint, shuffle, choice
+from random import random, randrange, shuffle, choice
 import numpy as np
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 from vocab import load_vocab
 
 
-""" 마스크 생성 """
 def create_pretrain_mask(tokens, mask_cnt, vocab_list):
+    """ 마스크 생성 """
     cand_idx = []
     for (i, token) in enumerate(tokens):
         if token == "[CLS]" or token == "[SEP]":
@@ -31,12 +30,12 @@ def create_pretrain_mask(tokens, mask_cnt, vocab_list):
             break
         for index in index_set:
             masked_token = None
-            if random() < 0.8: # 80% replace with [MASK]
+            if random() < 0.8:  # 80% replace with [MASK]
                 masked_token = "[MASK]"
             else:
-                if random() < 0.5: # 10% keep original
+                if random() < 0.5:  # 10% keep original
                     masked_token = tokens[index]
-                else: # 10% random word
+                else:  # 10% random word
                     masked_token = choice(vocab_list)
             mask_lms.append({"index": index, "label": tokens[index]})
             tokens[index] = masked_token
@@ -47,8 +46,8 @@ def create_pretrain_mask(tokens, mask_cnt, vocab_list):
     return tokens, mask_idx, mask_label
 
 
-""" 쵀대 길이 초과하는 토큰 자르기 """
 def trim_tokens(tokens_a, tokens_b, max_seq):
+    """ 쵀대 길이 초과하는 토큰 자르기 """
     while True:
         total_length = len(tokens_a) + len(tokens_b)
         if total_length <= max_seq:
@@ -60,17 +59,17 @@ def trim_tokens(tokens_a, tokens_b, max_seq):
             tokens_b.pop()
 
 
-""" pretrain 데이터 생성 """
 def create_pretrain_instances(datas, doc_idx, doc, n_seq, mask_prob, vocab_list):
+    """ pretrain 데이터 생성 """
     # for CLS], [SEP], [SEP]
     max_seq = n_seq - 3
     tgt_seq = max_seq
-    
+
     instances = []
     current_chunk = []
     current_length = 0
     for i in range(len(doc)):
-        current_chunk.append(doc[i]) # line
+        current_chunk.append(doc[i])  # line
         current_length += len(doc[i])
         if i == len(doc) - 1 or current_length >= tgt_seq:
             if 0 < len(current_chunk):
@@ -80,7 +79,7 @@ def create_pretrain_instances(datas, doc_idx, doc, n_seq, mask_prob, vocab_list)
                 tokens_a = []
                 for j in range(a_end):
                     tokens_a.extend(current_chunk[j])
-                
+
                 tokens_b = []
                 if len(current_chunk) == 1 or random() < 0.5:
                     is_next = 0
@@ -121,8 +120,8 @@ def create_pretrain_instances(datas, doc_idx, doc, n_seq, mask_prob, vocab_list)
     return instances
 
 
-""" pretrain 데이터 생성 """
 def make_pretrain_data(args):
+    """ pretrain 데이터 생성 """
     vocab = load_vocab(args.vocab)
     vocab_list = []
     for id in range(vocab.get_piece_size()):
@@ -133,7 +132,7 @@ def make_pretrain_data(args):
     with open(args.input, "r") as in_f:
         for line in in_f:
             line_cnt += 1
-    
+
     datas = []
     with open(args.input, "r") as f:
         for i, line in enumerate(tqdm(f, total=line_cnt, desc="Loading Dataset", unit=" lines")):
@@ -149,8 +148,9 @@ def make_pretrain_data(args):
                 out_f.write("\n")
 
 
-""" pretrain 데이터셋 """
 class PretrainDataSet(torch.utils.data.Dataset):
+    """ pretrain 데이터셋 """
+
     def __init__(self, vocab, infile):
         self.vocab = vocab
         self.labels_cls = []
@@ -175,13 +175,13 @@ class PretrainDataSet(torch.utils.data.Dataset):
                 label_lm = np.full(len(sentences), dtype=np.int, fill_value=-1)
                 label_lm[mask_idx] = mask_label
                 self.labels_lm.append(label_lm)
-    
+
     def __len__(self):
         assert len(self.labels_cls) == len(self.labels_lm)
         assert len(self.labels_cls) == len(self.sentences)
         assert len(self.labels_cls) == len(self.segments)
         return len(self.labels_cls)
-    
+
     def __getitem__(self, item):
         return (torch.tensor(self.labels_cls[item]),
                 torch.tensor(self.labels_lm[item]),
@@ -189,8 +189,8 @@ class PretrainDataSet(torch.utils.data.Dataset):
                 torch.tensor(self.segments[item]))
 
 
-""" pretrain data collate_fn """
 def pretrin_collate_fn(inputs):
+    """ pretrain data collate_fn """
     labels_cls, labels_lm, inputs, segments = list(zip(*inputs))
 
     labels_lm = torch.nn.utils.rnn.pad_sequence(labels_lm, batch_first=True, padding_value=-1)
@@ -206,8 +206,8 @@ def pretrin_collate_fn(inputs):
     return batch
 
 
-""" pretraun 데이터 로더 """
 def build_pretrain_loader(vocab, args, shuffle=True):
+    """ pretraun 데이터 로더 """
     dataset = PretrainDataSet(vocab, args.input)
     if 1 < args.n_gpu and shuffle:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset)
@@ -218,8 +218,9 @@ def build_pretrain_loader(vocab, args, shuffle=True):
     return loader, sampler
 
 
-""" 영화 분류 데이터셋 """
 class MovieDataSet(torch.utils.data.Dataset):
+    """ 영화 분류 데이터셋 """
+
     def __init__(self, vocab, infile):
         self.vocab = vocab
         self.labels = []
@@ -238,20 +239,20 @@ class MovieDataSet(torch.utils.data.Dataset):
                 sentence = [vocab.piece_to_id("[CLS]")] + [vocab.piece_to_id(p) for p in data["doc"]] + [vocab.piece_to_id("[SEP]")]
                 self.sentences.append(sentence)
                 self.segments.append([0] * len(sentence))
-    
+
     def __len__(self):
         assert len(self.labels) == len(self.sentences)
         assert len(self.labels) == len(self.segments)
         return len(self.labels)
-    
+
     def __getitem__(self, item):
         return (torch.tensor(self.labels[item]),
                 torch.tensor(self.sentences[item]),
                 torch.tensor(self.segments[item]))
 
 
-""" movie data collate_fn """
 def movie_collate_fn(inputs):
+    """ movie data collate_fn """
     labels, inputs, segments = list(zip(*inputs))
 
     inputs = torch.nn.utils.rnn.pad_sequence(inputs, batch_first=True, padding_value=0)
@@ -265,8 +266,8 @@ def movie_collate_fn(inputs):
     return batch
 
 
-""" 데이터 로더 """
 def build_data_loader(vocab, infile, args, shuffle=True):
+    """ 데이터 로더 """
     dataset = MovieDataSet(vocab, infile)
     if 1 < args.n_gpu and shuffle:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset)
@@ -293,4 +294,3 @@ if __name__ == '__main__':
 
     if not os.path.isfile(args.output):
         make_pretrain_data(args)
-

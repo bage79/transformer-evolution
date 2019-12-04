@@ -18,7 +18,7 @@ import logging
 import math
 
 import torch
-from torch.optim import Optimizer
+from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ def get_constant_schedule_with_warmup(optimizer, num_warmup_steps, last_epoch=-1
     """ Create a schedule with a constant learning rate preceded by a warmup
     period during which the learning rate increases linearly between 0 and 1.
     """
+
     def lr_lambda(current_step):
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1.0, num_warmup_steps))
@@ -46,6 +47,7 @@ def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
     """ Create a schedule with a learning rate that decreases linearly after
     linearly increasing during a warmup period.
     """
+
     def lr_lambda(current_step):
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1, num_warmup_steps))
@@ -59,6 +61,7 @@ def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
     values of the cosine function between 0 and `pi * cycles` after a warmup
     period during which it increases linearly between 0 and 1.
     """
+
     def lr_lambda(current_step):
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1, num_warmup_steps))
@@ -73,6 +76,7 @@ def get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_ste
     values of the cosine function with several hard restarts, after a warmup
     period during which it increases linearly between 0 and 1.
     """
+
     def lr_lambda(current_step):
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1, num_warmup_steps))
@@ -94,12 +98,13 @@ class AdamW(Optimizer):
         weight_decay (float): Weight decay. Default: 0.0
         correct_bias (bool): can be set to False to avoid correcting bias in Adam (e.g. like in Bert TF repository). Default True.
     """
+
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-6, weight_decay=0.0, correct_bias=True):
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {} - should be >= 0.0".format(lr))
         if not 0.0 <= betas[0] < 1.0:
             raise ValueError("Invalid beta parameter: {} - should be in [0.0, 1.0[".format(betas[0]))
-        if not 0.0 <= betas[1]  < 1.0:
+        if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter: {} - should be in [0.0, 1.0[".format(betas[1]))
         if not 0.0 <= eps:
             raise ValueError("Invalid epsilon value: {} - should be >= 0.0".format(eps))

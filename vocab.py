@@ -1,11 +1,14 @@
-import sys, os, argparse, datetime, time, re, collections
-import pandas as pd
+import argparse
 import csv
+import os
+import sys
+
+import pandas as pd
 import sentencepiece as spm
 
 
-""" pretrain corpus 생성 """
 def build_corpus(infile, outfile):
+    """ pretrain corpus 생성 """
     csv.field_size_limit(sys.maxsize)
     SEPARATOR = u"\u241D"
     df = pd.read_csv(infile, sep=SEPARATOR, engine="python")
@@ -19,10 +22,10 @@ def build_corpus(infile, outfile):
     return outfile
 
 
-""" vocab 생성 """
 def build_vocab(args):
+    """ vocab 생성 """
     spm.SentencePieceTrainer.train(
-        f"--input={args.corpus} --model_prefix={args.prefix} --vocab_size={args.vocab_size + 7}" + 
+        f"--input={args.corpus} --model_prefix={args.prefix} --vocab_size={args.vocab_size + 7}" +
         " --model_type=bpe" +
         " --max_sentence_length=999999" +
         " --pad_id=0 --pad_piece=[PAD]" +
@@ -32,8 +35,8 @@ def build_vocab(args):
         " --user_defined_symbols=[SEP],[CLS],[MASK]")
 
 
-""" vocab 로드 """
 def load_vocab(file):
+    """ vocab 로드 """
     vocab = spm.SentencePieceProcessor()
     vocab.load(file)
     return vocab
@@ -51,4 +54,3 @@ if __name__ == "__main__":
     if not os.path.isfile(args.corpus):
         build_corpus("data/kowiki.csv", args.corpus)
     build_vocab(args)
-

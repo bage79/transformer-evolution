@@ -4,3 +4,4 @@ wandb/
 kowiki.model
 kowiki.vocab
 *.pth
+/.python-version

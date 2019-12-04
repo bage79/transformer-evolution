@@ -1,25 +1,24 @@
 import sys
+
 sys.path.append("..")
-import os, argparse, datetime, time, re, collections
-from tqdm import tqdm, trange
+import os, argparse
+from tqdm import tqdm
 import json
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 
-""" pretrain 데이터 생성 """
 def create_pretrain_instances(doc, n_seq):
+    """ pretrain 데이터 생성 """
     # for [BOS], [EOS]
     max_seq = n_seq - 2
     tgt_seq = max_seq
-    
+
     instances = []
     current_chunk = []
     current_length = 0
     for i in range(len(doc)):
-        current_chunk.append(doc[i]) # line
+        current_chunk.append(doc[i])  # line
         current_length += len(doc[i])
         if i == len(doc) - 1 or current_length >= tgt_seq:
             if 0 < len(current_chunk):
@@ -36,8 +35,8 @@ def create_pretrain_instances(doc, n_seq):
     return instances
 
 
-""" pretrain 데이터 생성 """
 def make_pretrain_data(args):
+    """ pretrain 데이터 생성 """
     line_cnt = 0
     with open(args.input, "r") as in_f:
         for line in in_f:
@@ -56,10 +55,11 @@ def make_pretrain_data(args):
             for instance in instances:
                 out_f.write(json.dumps(instance))
                 out_f.write("\n")
-              
 
-""" pretrain 데이터셋 """
+
 class PretrainDataSet(torch.utils.data.Dataset):
+    """ pretrain 데이터셋 """
+
     def __init__(self, vocab, infile):
         self.vocab = vocab
         self.sentences = []
@@ -73,16 +73,16 @@ class PretrainDataSet(torch.utils.data.Dataset):
             for i, line in enumerate(tqdm(f, total=line_cnt, desc="Make Pretrain Dataset", unit=" lines")):
                 instance = json.loads(line)
                 self.sentences.append([vocab.piece_to_id(p) for p in instance["tokens"]])
-    
+
     def __len__(self):
         return len(self.sentences)
-    
+
     def __getitem__(self, item):
         return (torch.tensor(self.sentences[item]), torch.tensor(item))
 
 
-""" pretrain data collate_fn """
 def pretrin_collate_fn(inputs):
+    """ pretrain data collate_fn """
     dec_inputs, item = list(zip(*inputs))
 
     dec_inputs = torch.nn.utils.rnn.pad_sequence(dec_inputs, batch_first=True, padding_value=0)
@@ -94,8 +94,8 @@ def pretrin_collate_fn(inputs):
     return batch
 
 
-""" pretrain 데이터 로더 """
 def build_pretrain_loader(vocab, args, shuffle=True):
+    """ pretrain 데이터 로더 """
     dataset = PretrainDataSet(vocab, args.input)
     if 1 < args.n_gpu and shuffle:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset)
@@ -106,8 +106,9 @@ def build_pretrain_loader(vocab, args, shuffle=True):
     return loader, sampler
 
 
-""" 영화 분류 데이터셋 """
 class MovieDataSet(torch.utils.data.Dataset):
+    """ 영화 분류 데이터셋 """
+
     def __init__(self, vocab, infile):
         self.vocab = vocab
         self.labels = []
@@ -123,18 +124,18 @@ class MovieDataSet(torch.utils.data.Dataset):
                 data = json.loads(line)
                 self.labels.append(data["label"])
                 self.sentences.append([vocab.piece_to_id("[BOS]")] + [vocab.piece_to_id(p) for p in data["doc"]] + [vocab.piece_to_id("[EOS]")])
-    
+
     def __len__(self):
         assert len(self.labels) == len(self.sentences)
         return len(self.labels)
-    
+
     def __getitem__(self, item):
         return (torch.tensor(self.labels[item]),
                 torch.tensor(self.sentences[item]))
 
 
-""" movie data collate_fn """
 def movie_collate_fn(inputs):
+    """ movie data collate_fn """
     labels, dec_inputs = list(zip(*inputs))
 
     dec_inputs = torch.nn.utils.rnn.pad_sequence(dec_inputs, batch_first=True, padding_value=0)
@@ -146,8 +147,8 @@ def movie_collate_fn(inputs):
     return batch
 
 
-""" 데이터 로더 """
 def build_data_loader(vocab, infile, args, shuffle=True):
+    """ 데이터 로더 """
     dataset = MovieDataSet(vocab, infile)
     if 1 < args.n_gpu and shuffle:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset)
@@ -170,4 +171,3 @@ if __name__ == '__main__':
 
     if not os.path.isfile(args.output):
         make_pretrain_data(args)
-

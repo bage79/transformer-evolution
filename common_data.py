@@ -1,14 +1,16 @@
-import sys, os, argparse, datetime, time, re, collections
-import wget
-from tqdm import tqdm, trange
-import pandas as pd
+import argparse
 import json
+import os
+
+import pandas as pd
+import wget
+from tqdm import tqdm
 
 from vocab import load_vocab, build_corpus
 
 
-""" pretrain data 준비 """
 def prepare_pretrain(args, vocab, outfile):
+    """ pretrain data 준비 """
     line_cnt = 0
     with open(args.corpus, "r") as f:
         for line in f:
@@ -30,33 +32,33 @@ def prepare_pretrain(args, vocab, outfile):
                     doc.append(pieces)
         if doc:
             docs.append(doc)
-    
+
     # 단락 단위로 json 형태로 저장
     with open(outfile, "w") as f:
         with tqdm(total=len(docs), desc=f"{outfile} saving") as pbar:
             for doc in docs:
-                instance = { "doc": doc }
+                instance = {"doc": doc}
                 f.write(json.dumps(instance))
                 f.write("\n")
                 pbar.update(1)
 
 
-""" train data 준비 """
 def prepare_train(args, vocab, infile, outfile):
+    """ train data 준비 """
     df = pd.read_csv(infile, sep="\t", engine="python")
     with open(outfile, "w") as f:
         for index, row in df.iterrows():
             document = row["document"]
             if type(document) != str:
                 continue
-            instance = { "id": row["id"], "doc": vocab.encode_as_pieces(document), "label": row["label"] }
+            instance = {"id": row["id"], "doc": vocab.encode_as_pieces(document), "label": row["label"]}
             f.write(json.dumps(instance))
             f.write("\n")
             print(f"build {outfile} {index + 1} / {len(df)}", end="\r")
 
 
-""" 데이터 다운로드 """
 def download_data(args):
+    """ 데이터 다운로드 """
     print("download data/ratings_train.txt")
     filename = wget.download("https://raw.githubusercontent.com/e9t/nsmc/master/ratings_train.txt", "data")
     print()
@@ -73,7 +75,7 @@ if __name__ == "__main__":
 
     if not os.path.exists("data"):
         os.makedirs("data")
-    
+
     if args.mode == "download":
         download_data(args)
     elif args.mode == "prepare":
@@ -90,4 +92,3 @@ if __name__ == "__main__":
     else:
         print(f"지원하지 않는 모드 입니다. {args.mode}\n- downlaod: 학습할 데이터 다운로드\n- preapre: 학습할 데이터셋 생성")
         exit(1)
-

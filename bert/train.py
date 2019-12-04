@@ -1,25 +1,25 @@
 import sys
+
 sys.path.append("..")
-import os, argparse, datetime, time, re, collections, random
+import os, argparse, random
 from tqdm import tqdm, trange
 import numpy as np
 import wandb
 
 import torch
 import torch.distributed as dist
-import torch.nn as nn
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel
 
 from vocab import load_vocab
 import config as cfg
-import model as bert
-import data
+from . import model as bert
+from . import data
 import optimization as optim
 
 
-""" random seed """
 def set_seed(args):
+    """ random seed """
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -27,20 +27,20 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
-""" init_process_group """ 
 def init_process_group(rank, world_size):
+    """ init_process_group """
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
 
-""" destroy_process_group """
 def destroy_process_group():
+    """ destroy_process_group """
     dist.destroy_process_group()
 
 
-""" 모델 epoch 평가 """
 def eval_epoch(config, rank, model, data_loader):
+    """ 모델 epoch 평가 """
     matchs = []
     model.eval()
 
@@ -63,8 +63,8 @@ def eval_epoch(config, rank, model, data_loader):
     return np.sum(matchs) / len(matchs) if 0 < len(matchs) else 0
 
 
-""" 모델 epoch 학습 """
 def train_epoch(config, rank, epoch, model, criterion_cls, optimizer, scheduler, train_loader):
+    """ 모델 epoch 학습 """
     losses = []
     model.train()
 
@@ -91,8 +91,8 @@ def train_epoch(config, rank, epoch, model, criterion_cls, optimizer, scheduler,
     return np.mean(losses)
 
 
-""" 모델 학습 """
 def train_model(rank, world_size, args):
+    """ 모델 학습 """
     if 1 < args.n_gpu:
         init_process_group(rank, world_size)
     master = (world_size == 0 or rank % world_size == 0)
@@ -191,9 +191,8 @@ if __name__ == '__main__':
 
     if 1 < args.n_gpu:
         mp.spawn(train_model,
-             args=(args.n_gpu, args),
-             nprocs=args.n_gpu,
-             join=True)
+                 args=(args.n_gpu, args),
+                 nprocs=args.n_gpu,
+                 join=True)
     else:
         train_model(0 if args.gpu is None else args.gpu, args.n_gpu, args)
-
