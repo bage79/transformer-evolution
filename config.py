@@ -2,7 +2,7 @@ import json
 
 
 class Config(dict):
-    """ configuration json을 읽어들이는 class """
+    """ load json file and create a dict instance. """
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
 
@@ -11,3 +11,9 @@ class Config(dict):
         with open(file, 'r') as f:
             config = json.loads(f.read())
             return Config(config)
+
+
+if __name__ == '__main__':
+    c = Config.load('bert/config.json')
+    print(type(c))
+    print(c)
