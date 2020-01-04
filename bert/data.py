@@ -1,13 +1,15 @@
 import sys
 
 sys.path.append("..")
-import os, argparse
-from tqdm import tqdm
+import os, argparse, datetime, time, re, collections
+from tqdm import tqdm, trange
 import json
-from random import random, randrange, shuffle, choice
+from random import random, randrange, randint, shuffle, choice
 import numpy as np
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from vocab import load_vocab
 
@@ -28,6 +30,8 @@ def create_pretrain_mask(tokens, mask_cnt, vocab_list):
     for index_set in cand_idx:
         if len(mask_lms) >= mask_cnt:
             break
+        if len(mask_lms) + len(index_set) > mask_cnt:
+            continue
         for index in index_set:
             masked_token = None
             if random() < 0.8:  # 80% replace with [MASK]
@@ -59,7 +63,7 @@ def trim_tokens(tokens_a, tokens_b, max_seq):
             tokens_b.pop()
 
 
-def create_pretrain_instances(datas, doc_idx, doc, n_seq, mask_prob, vocab_list):
+def create_pretrain_instances(docs, doc_idx, doc, n_seq, mask_prob, vocab_list):
     """ pretrain 데이터 생성 """
     # for CLS], [SEP], [SEP]
     max_seq = n_seq - 3
@@ -86,8 +90,8 @@ def create_pretrain_instances(datas, doc_idx, doc, n_seq, mask_prob, vocab_list)
                     tokens_b_len = tgt_seq - len(tokens_a)
                     random_doc_idx = doc_idx
                     while doc_idx == random_doc_idx:
-                        random_doc_idx = randrange(0, len(datas))
-                    random_doc = datas[random_doc_idx]["doc"]
+                        random_doc_idx = randrange(0, len(docs))
+                    random_doc = docs[random_doc_idx]
 
                     random_start = randrange(0, len(random_doc))
                     for j in range(random_start, len(random_doc)):
@@ -132,20 +136,33 @@ def make_pretrain_data(args):
     with open(args.input, "r") as in_f:
         for line in in_f:
             line_cnt += 1
-
-    datas = []
+    
+    docs = []
     with open(args.input, "r") as f:
-        for i, line in enumerate(tqdm(f, total=line_cnt, desc="Loading Dataset", unit=" lines")):
-            data = json.loads(line)
-            if 0 < len(data["doc"]):
-                datas.append(data)
+        doc = []
+        for i, line in enumerate(tqdm(f, total=line_cnt, desc=f"Loading {args.input}", unit=" lines")):
+            line = line.strip()
+            if line == "":
+                if 0 < len(doc):
+                    docs.append(doc)
+                    doc = []
+            else:
+                pieces = vocab.encode_as_pieces(line)
+                if 0 < len(pieces):
+                    doc.append(pieces)
+        if doc:
+            docs.append(doc)
 
-    with open(args.output, "w") as out_f:
-        for i, data in enumerate(tqdm(datas, desc="Make Pretrain Dataset", unit=" lines")):
-            instances = create_pretrain_instances(datas, i, data["doc"], args.n_seq, args.mask_prob, vocab_list)
-            for instance in instances:
-                out_f.write(json.dumps(instance))
-                out_f.write("\n")
+    for index in range(args.count):
+        output = args.output.format(index)
+        if os.path.isfile(output): continue
+
+        with open(output, "w") as out_f:
+            for i, doc in enumerate(tqdm(docs, desc=f"Making {output}", unit=" lines")):
+                instances = create_pretrain_instances(docs, i, doc, args.n_seq, args.mask_prob, vocab_list)
+                for instance in instances:
+                    out_f.write(json.dumps(instance))
+                    out_f.write("\n")
 
 
 class PretrainDataSet(torch.utils.data.Dataset):
@@ -164,7 +181,7 @@ class PretrainDataSet(torch.utils.data.Dataset):
                 line_cnt += 1
 
         with open(infile, "r") as f:
-            for i, line in enumerate(tqdm(f, total=line_cnt, desc="Make Pretrain Dataset", unit=" lines")):
+            for i, line in enumerate(tqdm(f, total=line_cnt, desc=f"Loading {infile}", unit=" lines")):
                 instance = json.loads(line)
                 self.labels_cls.append(instance["is_next"])
                 sentences = [vocab.piece_to_id(p) for p in instance["tokens"]]
@@ -206,16 +223,16 @@ def pretrin_collate_fn(inputs):
     return batch
 
 
-def build_pretrain_loader(vocab, args, shuffle=True):
+def build_pretrain_loader(vocab, args, epoch=0, shuffle=True):
     """ pretraun 데이터 로더 """
-    dataset = PretrainDataSet(vocab, args.input)
+    dataset = PretrainDataSet(vocab, args.input.format(epoch % args.count))
     if 1 < args.n_gpu and shuffle:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset)
         loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, collate_fn=pretrin_collate_fn)
     else:
         sampler = None
         loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, shuffle=shuffle, collate_fn=pretrin_collate_fn)
-    return loader, sampler
+    return loader
 
 
 class MovieDataSet(torch.utils.data.Dataset):
@@ -280,11 +297,13 @@ def build_data_loader(vocab, infile, args, shuffle=True):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="../data/kowiki.json", type=str, required=False,
-                        help="input json file")
-    parser.add_argument("--output", default="../data/kowiki_bert.json", type=str, required=False,
+    parser.add_argument("--input", default="../data/kowiki.txt", type=str, required=False,
+                        help="input text file")
+    parser.add_argument("--output", default="../data/kowiki_bert_{}.json", type=str, required=False,
                         help="output json file")
-    parser.add_argument("--n_seq", default=512, type=int, required=False,
+    parser.add_argument("--count", default=10, type=int, required=False,
+                        help="count of pretrain data")
+    parser.add_argument("--n_seq", default=256, type=int, required=False,
                         help="sequence length")
     parser.add_argument("--vocab", default="../kowiki.model", type=str, required=False,
                         help="vocab file")
@@ -294,3 +313,6 @@ if __name__ == '__main__':
 
     if not os.path.isfile(args.output):
         make_pretrain_data(args)
+    else:
+        print(f"{args.output} exists")
+

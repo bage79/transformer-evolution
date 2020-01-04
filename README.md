@@ -34,7 +34,7 @@ $ python kowiki.py
 
 ## vocab 생성
 - kowiki 데이터를 sentencepiece를 이용해서 생성 합니다.
-- vocab size는 32,000개 입니다.
+- vocab size는 8,000개 입니다.
 ```sh
 $ python vocab.py
 ```
@@ -70,7 +70,21 @@ by Generative Pre-Training](https://s3-us-west-2.amazonaws.com/openai-assets/res
 - 논문은 [BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding](https://arxiv.org/abs/1810.04805)를 참고 하세요.
 
 
-## Visualization
+## 결과
+| ITEM                | Pretrain | epoch  | loss  | accuracy |
+|---------------------|----------|--------|-------|----------|
+| transformer-pre:0   | 0        | 18     | 0.303 | 0.832    |
+| gpt-pre:60-lm:0     | 60       | 16     | 0.322 | 0.837    |
+| bert-pre:60         | 60       | 19     | 0.349 | 0.818   |
+
+
+#### loss
+![](./img/loss.svg)
+
+#### accuracy
+![](./img/accuracy.svg)
+
+자세한 내용은 아래를 참고 하세요.
 - https://app.wandb.ai/cchyun/transformer-evolution
 
 
