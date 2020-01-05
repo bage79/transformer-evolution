@@ -1,11 +1,14 @@
-import sys, os, argparse, datetime, time, re, collections
-import pandas as pd
+import argparse
 import csv
+import os
+import sys
+
+import pandas as pd
 import sentencepiece as spm
 
 
 def build_corpus(downloaded_file, corpus_file):
-    """ pretrain corpus 생성 """
+    """ pretrain corpus 생성 (.csv -> .txt) """
     csv.field_size_limit(sys.maxsize)
     SEPARATOR = u"\u241D"
     LINE_SEPARATOR = "\n\n\n\n"  # TODO: '\n\n' 으로 해도 될 듯
@@ -21,8 +24,7 @@ def build_corpus(downloaded_file, corpus_file):
 
 
 def build_vocab(corpus_file, prefix, vocab_size):
-    """ vocab 생성 """
-    """ vocab 생성 """
+    """ vocab 생성 (.txt -> .model, .vocab) """
     spm.SentencePieceTrainer.train(
         f"--input={corpus_file} --model_prefix={prefix} --vocab_size={vocab_size + 7}" +
         " --model_type=bpe" +
@@ -45,10 +47,10 @@ def load_vocab(file):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prefix", default="kowiki", type=str, required=False,
-                        help="vocab prefix 입니다.")
+    parser.add_argument("--data_dir", default="data_sample", type=str, required=False,
+                        help="a data directory which have downloaded, corpus text, vocab files.")
     parser.add_argument("--vocab_size", default=8000, type=int, required=False,
-                        help="생성할 vocab 수 입니다.")
+                        help="max vocab size")
     args = parser.parse_args()
 
     for downloaded_file in os.listdir(args.data_dir):
