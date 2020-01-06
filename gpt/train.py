@@ -102,7 +102,7 @@ def train_model(rank, world_size, args):
     if 1 < args.n_gpu:
         init_process_group(rank, world_size)
     master = (world_size == 0 or rank % world_size == 0)
-    if master: wandb.init(project="transformer-evolution")
+    if master: wandb.init(project="transformer-evolution-bage")
 
     vocab = load_vocab(args.vocab)
 

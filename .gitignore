@@ -6,12 +6,6 @@ kowiki.vocab
 *.pth
 .idea
 /.python-version
-/data_sample/kowiki.txt
-/data_sample/kowiki.model
-/data_sample/kowiki.vocab
-/data_sample/ratings_train.json
-/data_sample/ratings_test.json
-/data_sample/ratings_train.txt.model
-/data_sample/ratings_test.txt.model
-/data_sample/ratings_test.txt.vocab
-/data_sample/ratings_train.txt.vocab
+ratings_test.json
+ratings_train.json
+kowiki.txt

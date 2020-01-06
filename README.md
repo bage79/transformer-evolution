@@ -5,19 +5,14 @@ Transformer 이후 나온 Pretrained Language Model을 이해하기 위해서 �
 * Python(=3.6)
 
 ```sh
-$ pip install torch
-$ pip install pandas
-$ pip install tqdm
-$ pip install wget
-$ pip install sentencepiece
-$ pip install wandb
+pip install -r requirements.txt
 ```
 
 
 ## train data 준비
 - [Naver Movie](https://movie.naver.com/movie/point/af/list.nhn) 데이터를 사용 했습니다.
 ```sh
-$ python common_data.py --mode download
+python common_data.py --mode download
 ```
 - data 폴더 아래 'ratings_test.txt', 'ratings_train.txt' 두개의 파일을 다운로드 합니다.
 
@@ -25,9 +20,9 @@ $ python common_data.py --mode download
 ## pretrain data 준비
 - [web-crawler](https://github.com/paul-hyun/web-crawler)를 이용하세요.
 ```sh
-$ git clone https://github.com/paul-hyun/web-crawler.git
-$ cd web-crawler
-$ python kowiki.py
+git clone https://github.com/paul-hyun/web-crawler.git
+cd web-crawler
+python kowiki.py
 ```
 - 다운로드 된 kowiki_yyyymmdd.csv 파일을 <transformer-evolution-home>/data/kowiki.csv로 복사해 주세요.
 
@@ -36,7 +31,7 @@ $ python kowiki.py
 - kowiki 데이터를 sentencepiece를 이용해서 생성 합니다.
 - vocab size는 8,000개 입니다.
 ```sh
-$ python vocab.py
+python vocab.py
 ```
 - 'kowiki.model', 'kowiki.vocab' vocab 관련한 두개의 파일을 생성 합니다.
 
@@ -45,7 +40,7 @@ $ python vocab.py
 - pretrain 및 train data를 모델에서 사용하기 좋은 형태로 미리 만들어 놓습니다.
 - 세부 처리는 각 모델에서 필요에 따라 처리 합니다.
 ```sh
-$ python common_data.py --mode prepare
+python common_data.py --mode prepare
 ```
 - data 폴더 아래 'kowiki.json' 파일이 생성 됩니다.
 

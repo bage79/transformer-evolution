@@ -1,15 +1,16 @@
 import numpy as np
-import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-""" sinusoid position encoding """
 def get_sinusoid_encoding_table(n_seq, d_hidn):
+    """ sinusoid position encoding """
+
     def cal_angle(position, i_hidn):
         return position / np.power(10000, 2 * (i_hidn // 2) / d_hidn)
+
     def get_posi_angle_vec(position):
         return [cal_angle(position, i_hidn) for i_hidn in range(d_hidn)]
 
@@ -35,8 +36,9 @@ def get_attn_decoder_mask(seq):
     return subsequent_mask
 
 
-""" scale dot product attention """
 class ScaledDotProductAttention(nn.Module):
+    """ scale dot product attention """
+
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -128,6 +130,7 @@ class EncoderLayer(nn.Module):
         self.layer_norm2 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
 
     def forward(self, inputs, attn_mask):
+        # inputs=
         # (bs, n_enc_seq, d_hidn), (bs, n_head, n_enc_seq, n_enc_seq)
         att_outputs, attn_prob = self.self_attn(inputs, inputs, inputs, attn_mask)
         att_outputs = self.layer_norm1(inputs + att_outputs)
@@ -152,7 +155,9 @@ class Encoder(nn.Module):
         self.layers = nn.ModuleList([EncoderLayer(self.config) for _ in range(self.config.n_layer)])
 
     def forward(self, inputs):
-        positions = torch.arange(inputs.size(1), device=inputs.device, dtype=inputs.dtype).expand(inputs.size(0), inputs.size(1)).contiguous() + 1
+        # inputs=(bs, n_enc_seq_in_data) # 단, n_enc_seq_in_data <= n_enc_seq
+        bs, n_enc_seq_in_data = inputs.size()
+        positions = torch.arange(n_enc_seq_in_data, device=inputs.device, dtype=inputs.dtype).expand(bs, n_enc_seq_in_data).contiguous() + 1  # TODO: 왜 굳이 시작을 1부터 했을까?
         pos_mask = inputs.eq(self.config.i_pad)
         positions.masked_fill_(pos_mask, 0)
 
@@ -269,13 +274,23 @@ class MovieClassification(nn.Module):
         self.projection = nn.Linear(self.config.d_hidn, self.config.n_output, bias=False)
 
     def forward(self, enc_inputs, dec_inputs):
-        # (bs, n_dec_seq, d_hidn), [(bs, n_head, n_enc_seq, n_enc_seq)], [(bs, n_head, n_dec_seq, n_dec_seq)], [(bs, n_head, n_dec_seq, n_enc_seq)]
+        # enc_inputs=(bs, n_enc_seq)
+        # dec_inputs=(bs, n_dec_seq)
+        # dec_outputs=(bs, n_dec_seq, d_hidn)
+        # enc_self_attn_probs=n_layer*(bs, n_head, n_enc_seq, n_enc_seq)
+        # dec_self_attn_probs=n_layer*(bs, n_head, n_dec_seq, n_dec_seq)
+        # dec_enc_attn_probs=n_layer*(bs, n_head, n_dec_seq, n_enc_seq)
         dec_outputs, enc_self_attn_probs, dec_self_attn_probs, dec_enc_attn_probs = self.transformer(enc_inputs, dec_inputs)
-        # (bs, d_hidn)
-        dec_outputs, _ = torch.max(dec_outputs, dim=1)
-        # (bs, n_output)
-        logits = self.projection(dec_outputs)
-        # (bs, n_output), [(bs, n_head, n_enc_seq, n_enc_seq)], [(bs, n_head, n_dec_seq, n_dec_seq)], [(bs, n_head, n_dec_seq, n_enc_seq)]
+
+        # dec_outputs=(bs, n_dec_seq, d_hidn)=(bs, 1, d_hidn)
+        # _dec_outputs=(bs, d_hidn)
+        _dec_outputs, _ = torch.max(dec_outputs, dim=1)  # output sequence 중에 하나의 hidden 을 뽑아서 nn.Linear의 input으로 사용
+
+        # _dec_outputs=(bs, d_hidn)
+        # logits=(bs, n_output)=(bs, positive_or_negative)
+        logits = self.projection(_dec_outputs)  # positive, negative 각각에 대한, 확률 계산
+
+        # logits=(bs, n_output)
         return logits, enc_self_attn_probs, dec_self_attn_probs, dec_enc_attn_probs
 
     def save(self, epoch, loss, score, path):

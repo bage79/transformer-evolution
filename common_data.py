@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import wget
 
+from config import IS_DEBUG
 from vocab import load_vocab, build_corpus
 
 
@@ -17,7 +18,7 @@ def prepare_train(args, vocab, infile, outfile):
             if type(document) != str:
                 continue
             instance = {"id": row["id"], "doc": vocab.encode_as_pieces(document), "label": row["label"]}
-            f.write(json.dumps(instance))
+            f.write(json.dumps(instance, ensure_ascii=False))
             f.write("\n")
             print(f"build {outfile} {index + 1} / {len(df)}", end="\r")
 
@@ -34,7 +35,7 @@ def download_data(data_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default="data_sample", type=str, required=False,
+    parser.add_argument("--data_dir", default="data" if not IS_DEBUG else "data_sample", type=str, required=False,
                         help="a data directory which have downloaded, corpus text, vocab files.")
     parser.add_argument("--mode", default="prepare", type=str, required=False,
                         help="동작모드 입니다. download: 학습할 데이터 다운로드, prepare: 학습할 데이터셋 생성")

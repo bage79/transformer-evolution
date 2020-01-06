@@ -6,6 +6,8 @@ import sys
 import pandas as pd
 import sentencepiece as spm
 
+from config import IS_DEBUG
+
 
 def build_corpus(downloaded_file, corpus_file):
     """ pretrain corpus 생성 (.csv -> .txt) """
@@ -47,17 +49,18 @@ def load_vocab(file):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default="data_sample", type=str, required=False,
+    parser.add_argument("--data_dir", default="data_sample" if not IS_DEBUG else "data_sample", type=str, required=False,
                         help="a data directory which have downloaded, corpus text, vocab files.")
     parser.add_argument("--vocab_size", default=8000, type=int, required=False,
                         help="max vocab size")
     args = parser.parse_args()
 
     for downloaded_file in os.listdir(args.data_dir):
-        downloaded_file = os.path.join(args.data_dir, downloaded_file)
+        if downloaded_file.endswith('.csv'):
+            downloaded_file = os.path.join(args.data_dir, downloaded_file)
 
-        corpus_file = downloaded_file.replace('.csv', '.txt')
-        prefix = downloaded_file.replace('.csv', '')
-        if downloaded_file.endswith('.csv') and not os.path.isfile(corpus_file):
-            build_corpus(downloaded_file, corpus_file)
-        build_vocab(corpus_file, prefix, args.vocab_size)
+            corpus_file = downloaded_file.replace('.csv', '.txt')
+            prefix = downloaded_file.replace('.csv', '')
+            if downloaded_file.endswith('.csv') and not os.path.isfile(corpus_file):
+                build_corpus(downloaded_file, corpus_file)
+            build_vocab(corpus_file, prefix, args.vocab_size)

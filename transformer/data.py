@@ -1,10 +1,9 @@
-import sys
-
-sys.path.append("..")
-from tqdm import tqdm
 import json
 
 import torch
+from torch.utils.data.dataloader import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 
 class MovieDataSet(torch.utils.data.Dataset):
@@ -38,15 +37,16 @@ class MovieDataSet(torch.utils.data.Dataset):
 
 def movie_collate_fn(inputs):
     """ movie data collate_fn """
-    labels, enc_inputs, dec_inputs = list(zip(*inputs))
+    # inputs = [(label, [wids in sentence], [BOS]), ...] -> [label, ...], [[wids in sentence], ...], [[BOS], ...]
+    labels, _enc_inputs, _dec_inputs = list(zip(*inputs))
 
-    enc_inputs = torch.nn.utils.rnn.pad_sequence(enc_inputs, batch_first=True, padding_value=0)
-    dec_inputs = torch.nn.utils.rnn.pad_sequence(dec_inputs, batch_first=True, padding_value=0)
+    enc_inputs = torch.nn.utils.rnn.pad_sequence(_enc_inputs, batch_first=True, padding_value=0)  # [[wids in sentence], ...] -> [[padded wids in sentence], ...]
+    dec_inputs = torch.nn.utils.rnn.pad_sequence(_dec_inputs, batch_first=True, padding_value=0)  # [[BOS], ...] -> [[BOS], ...]
 
     batch = [
-        torch.stack(labels, dim=0),
-        enc_inputs,
-        dec_inputs,
+        torch.stack(labels, dim=0),  # [tensor(label), ...] -> tensor([label, ...]) (bs)
+        enc_inputs,  # tensor([[padded wids in sentence], ...]) (bs, max_sequence_len)
+        dec_inputs,  # tensor([[BOS], ...]) (bs, 1)
     ]
     return batch
 
@@ -54,10 +54,10 @@ def movie_collate_fn(inputs):
 def build_data_loader(vocab, infile, args, shuffle=True):
     """ 데이터 로더 """
     dataset = MovieDataSet(vocab, infile)
+    sampler = None
     if 1 < args.n_gpu and shuffle:
-        sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, collate_fn=movie_collate_fn)
+        sampler = DistributedSampler(dataset)
+        loader = DataLoader(dataset, batch_size=args.batch, collate_fn=movie_collate_fn, sampler=sampler)
     else:
-        sampler = None
-        loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, shuffle=shuffle, collate_fn=movie_collate_fn)
+        loader = DataLoader(dataset, batch_size=args.batch, collate_fn=movie_collate_fn, shuffle=shuffle)
     return loader, sampler

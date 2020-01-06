@@ -65,7 +65,7 @@ def make_pretrain_data(args, vocab):
         for i, doc in enumerate(tqdm(docs, desc=f"Making {args.output}", unit=" lines")):
             instances = create_pretrain_instances(doc, args.n_seq)
             for instance in instances:
-                out_f.write(json.dumps(instance))
+                out_f.write(json.dumps(instance, ensure_ascii=False))
                 out_f.write("\n")
 
 
