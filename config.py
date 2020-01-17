@@ -1,7 +1,7 @@
 import json
 import platform
 
-IS_DEBUG = True if platform.system() == 'Darwin' else False  # MacOS -> IS_DEBUG=True
+IS_MAC = True if platform.system() == 'Darwin' else False  # MacOS -> IS_DEBUG=True
 
 
 class Config(dict):

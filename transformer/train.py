@@ -8,10 +8,10 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import wandb
 from torch.nn.parallel import DistributedDataParallel
-from tqdm import tqdm, trange
+from tqdm import tqdm
 
 import optimization as optim
-from config import IS_DEBUG, Config
+from config import IS_MAC, Config
 from transformer import data
 from transformer import model as transformer
 from transformer.model import MovieClassification
@@ -46,20 +46,20 @@ def eval_epoch(config, rank, classification: MovieClassification, data_loader):
 
     n_word_total = 0
     n_correct_total = 0
-    with tqdm(total=len(data_loader), desc=f"Valid({rank})") as pbar:
-        for i, value in enumerate(data_loader):
-            labels, enc_inputs, dec_inputs = map(lambda v: v.to(config.device), value)
+    # with tqdm(total=len(data_loader), desc=f"Valid({rank})") as pbar:
+    for i, value in enumerate(data_loader):
+        labels, enc_inputs, dec_inputs = map(lambda v: v.to(config.device), value)
 
-            outputs = classification(enc_inputs, dec_inputs)
-            logits = outputs[0]  # logits=(bs, n_outputs)
-            _, indices = logits.max(1)  # indices=(bs)
+        outputs = classification(enc_inputs, dec_inputs)
+        logits = outputs[0]  # logits=(bs, n_outputs)
+        _, indices = logits.max(1)  # indices=(bs)
 
-            match = torch.eq(indices, labels).detach()
-            matchs.extend(match.cpu())
-            accuracy = np.sum(matchs) / len(matchs) if 0 < len(matchs) else 0
+        match = torch.eq(indices, labels).detach()
+        matchs.extend(match.cpu())
+        accuracy = np.sum(matchs) / len(matchs) if 0 < len(matchs) else 0
 
-            pbar.update(1)
-            pbar.set_postfix_str(f"Acc: {accuracy:.3f}")
+        # pbar.update(1)
+        # pbar.set_postfix_str(f"Acc: {accuracy:.3f}")
     return accuracy
 
 
@@ -68,11 +68,9 @@ def train_epoch(config, rank, epoch, classification: MovieClassification, criter
     losses = []
     classification.train()
 
-    with tqdm(total=len(train_loader), desc=f"Train({rank}) {epoch}") as pbar:
+    with tqdm(total=len(train_loader), desc=f"Train({rank}) epoch={epoch}") as pbar:
         for i, value in enumerate(train_loader):
-            # labels=(bs)
-            # enc_inputs=(bs, n_enc_seq)
-            # dec_inputs=(bs, n_dec_seq)
+            # labels=(bs), enc_inputs=(bs, n_enc_seq), dec_inputs=(bs, n_dec_seq)
             labels, enc_inputs, dec_inputs = map(lambda v: v.to(config.device), value)  # (bs), (bs, max_sequence_len), (bs, 1)
 
             optimizer.zero_grad()
@@ -97,7 +95,7 @@ def train_model(rank, world_size, args):
     if 1 < args.n_gpu:
         init_process_group(rank, world_size)
     master = (world_size == 0 or rank % world_size == 0)
-    if master:
+    if master and args.wandb:
         wandb.init(project="transformer-evolution-bage")
 
     vocab = load_vocab(args.vocab)
@@ -117,7 +115,7 @@ def train_model(rank, world_size, args):
         model = DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
     else:
         model.to(config.device)
-    if master:
+    if master and args.wandb:
         wandb.watch(model)
 
     criterion = torch.nn.CrossEntropyLoss()
@@ -135,23 +133,27 @@ def train_model(rank, world_size, args):
     scheduler = optim.get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total)
 
     offset = best_epoch
-    for step in trange(args.epoch, desc="Epoch"):
-        if train_sampler:
-            train_sampler.set_epoch(step)
-        epoch = step + offset
+    with tqdm(total=args.epoch, desc=f"Epoch", position=0) as pbar:
+        for step in range(args.epoch):
+            if train_sampler:
+                train_sampler.set_epoch(step)
+            epoch = step + offset
 
-        loss = train_epoch(config, rank, epoch, model, criterion, optimizer, scheduler, train_loader)
-        score = eval_epoch(config, rank, model, test_loader)
-        if master:
-            wandb.log({"loss": loss, "accuracy": score})
+            loss = train_epoch(config, rank, epoch, model, criterion, optimizer, scheduler, train_loader)
+            score = eval_epoch(config, rank, model, test_loader)
+            if master and args.wandb:
+                wandb.log({"loss": loss, "accuracy": score})
 
-        if master and best_score < score:
-            best_epoch, best_loss, best_score = epoch, loss, score
-            if isinstance(model, DistributedDataParallel):
-                model.module.save(best_epoch, best_loss, best_score, args.save)
-            else:
-                model.save(best_epoch, best_loss, best_score, args.save)
-            print(f">>>> rank: {rank} save model to {args.save}, epoch={best_epoch}, loss={best_loss:.3f}, socre={best_score:.3f}")
+            if master and best_score < score:
+                best_epoch, best_loss, best_score = epoch, loss, score
+                pbar.set_description(f'Best (score={best_score:.3f}, epoch={best_epoch})')
+                if isinstance(model, DistributedDataParallel):
+                    model.module.save(best_epoch, best_loss, best_score, args.save)
+                else:
+                    model.save(best_epoch, best_loss, best_score, args.save)
+                # print(f">>>> rank: {rank} save model to {os.path.basename(args.save)}, epoch={best_epoch}, loss={best_loss:.3f}, score={best_score:.3f}")
+
+            pbar.update()
 
     if 1 < args.n_gpu:
         destroy_process_group()
@@ -159,18 +161,17 @@ def train_model(rank, world_size, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default="../data" if not IS_DEBUG else "../data_sample", type=str, required=False,  # FIXME: 테스트중
+    parser.add_argument("--wandb", default=False, type=bool, required=False, help="logging to wandb or not")
+    parser.add_argument("--data_dir", default="../data" if not IS_MAC else "../data_sample", type=str, required=False,
                         help="a data directory which have downloaded, corpus text, vocab files.")
-    parser.add_argument("--config", default="config_half.json", type=str, required=False,
-                        help="config file")
     parser.add_argument("--vocab", default="kowiki.model", type=str, required=False,
                         help="vocab file")
-    parser.add_argument("--save", default="save_best.pth", type=str, required=False,
-                        help="save file")
-    parser.add_argument("--epoch", default=20 if not IS_DEBUG else 2, type=int, required=False,
+    parser.add_argument("--config", default="config_half.json", type=str, required=False,
+                        help="config file")
+    parser.add_argument("--epoch", default=20 if not IS_MAC else 4, type=int, required=False,
                         help="epoch")
-    parser.add_argument("--batch", default=512 if not IS_DEBUG else 4, type=int, required=False,
-                        help="batch")
+    parser.add_argument("--batch", default=256 if not IS_MAC else 4, type=int, required=False,
+                        help="batch")  # batch=256 for Titan XP, batch=512 for V100
     parser.add_argument("--gpu", default=None, type=int, required=False,
                         help="GPU id to use.")
     parser.add_argument('--seed', type=int, default=42, required=False,
@@ -184,7 +185,13 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_steps', type=float, default=0, required=False,
                         help="warmup steps")
     args = parser.parse_args()
+    args.name = f'{os.path.basename(args.data_dir)}.{os.path.basename(args.config).replace(".json", "")}.batch.{args.batch}.epoch.{args.epoch}'
     args.vocab = os.path.abspath(os.path.join(os.getcwd(), args.data_dir, args.vocab))
+    args.save = os.path.abspath(os.path.join(os.getcwd(), "save", f'{args.name}.pth'))
+    print(args)
+
+    if not os.path.exists("save"):
+        os.makedirs("save")
 
     if torch.cuda.is_available():
         args.n_gpu = torch.cuda.device_count() if args.gpu is None else 1

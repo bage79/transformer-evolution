@@ -1,21 +1,20 @@
-import sys
+import argparse
+import os
+import random
 
-sys.path.append("..")
-import os, argparse, random
-from tqdm import tqdm, trange
 import numpy as np
-import wandb
-
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import wandb
 from torch.nn.parallel import DistributedDataParallel
+from tqdm import tqdm, trange
 
-from vocab import load_vocab
 import config as cfg
-from . import model as bert
-from . import data
 import optimization as optim
+from vocab import load_vocab
+from . import data
+from . import model as bert
 
 
 def set_seed(args):
@@ -96,7 +95,8 @@ def train_model(rank, world_size, args):
     if 1 < args.n_gpu:
         init_process_group(rank, world_size)
     master = (world_size == 0 or rank % world_size == 0)
-    if master: wandb.init(project="transformer-evolution-bage")
+    if master and args.wandb:
+        wandb.init(project="transformer-evolution-bage")
 
     vocab = load_vocab(args.vocab)
 
@@ -118,7 +118,9 @@ def train_model(rank, world_size, args):
         model = DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
     else:
         model.to(config.device)
-    if master: wandb.watch(model)
+
+    if master and args.wandb:
+        wandb.watch(model)
 
     criterion_cls = torch.nn.CrossEntropyLoss()
 
@@ -142,7 +144,8 @@ def train_model(rank, world_size, args):
 
         loss = train_epoch(config, rank, epoch, model, criterion_cls, optimizer, scheduler, train_loader)
         score = eval_epoch(config, rank, model, test_loader)
-        if master: wandb.log({"loss": loss, "accuracy": score})
+        if master and args.wandb:
+            wandb.log({"loss": loss, "accuracy": score})
 
         if master and best_score < score:
             best_epoch, best_loss, best_score = epoch, loss, score

@@ -26,7 +26,7 @@ def get_attn_pad_mask(seq_q, seq_k, i_pad):
     batch_size, len_q = seq_q.size()
     batch_size, len_k = seq_k.size()
     pad_attn_mask = seq_k.data.eq(i_pad).unsqueeze(1).expand(batch_size, len_q, len_k)  # <pad>
-    return pad_attn_mask
+    return pad_attn_mask  # (bs, seq_q_len, seq_k_len)=(bs, seq_len, seq_len)
 
 
 def get_attn_decoder_mask(seq):
@@ -36,30 +36,29 @@ def get_attn_decoder_mask(seq):
     return subsequent_mask
 
 
-class ScaledDotProductAttention(nn.Module):
-    """ scale dot product attention """
-
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.dropout = nn.Dropout(config.dropout)
-        self.scale = 1 / (self.config.d_head ** 0.5)
-
-    def forward(self, Q, K, V, attn_mask):
-        # (bs, n_head, n_q_seq, n_k_seq)
-        scores = torch.matmul(Q, K.transpose(-1, -2)).mul_(self.scale)
-        scores.masked_fill_(attn_mask, -1e9)
-        # (bs, n_head, n_q_seq, n_k_seq)
-        attn_prob = nn.Softmax(dim=-1)(scores)
-        attn_prob = self.dropout(attn_prob)
-        # (bs, n_head, n_q_seq, d_v)
-        context = torch.matmul(attn_prob, V)
-        # (bs, n_head, n_q_seq, d_v), (bs, n_head, n_q_seq, n_v_seq)
-        return context, attn_prob
-
-
 class MultiHeadAttention(nn.Module):
     """ multi head attention """
+
+    class ScaledDotProductAttention(nn.Module):
+        """ scale dot product attention """
+
+        def __init__(self, config):
+            super().__init__()
+            self.config = config
+            self.dropout = nn.Dropout(config.dropout)
+            self.scale = 1 / (self.config.d_head ** 0.5)
+
+        def forward(self, Q, K, V, attn_mask):
+            # (bs, n_head, n_q_seq, n_k_seq)
+            scores = torch.matmul(Q, K.transpose(-1, -2)).mul_(self.scale)
+            scores.masked_fill_(attn_mask, -1e9)
+            # (bs, n_head, n_q_seq, n_k_seq)
+            attn_prob = nn.Softmax(dim=-1)(scores)
+            attn_prob = self.dropout(attn_prob)
+            # (bs, n_head, n_q_seq, d_v)
+            context = torch.matmul(attn_prob, V)
+            # (bs, n_head, n_q_seq, d_v), (bs, n_head, n_q_seq, n_v_seq)
+            return context, attn_prob
 
     def __init__(self, config):
         super().__init__()
@@ -68,7 +67,7 @@ class MultiHeadAttention(nn.Module):
         self.W_Q = nn.Linear(self.config.d_hidn, self.config.n_head * self.config.d_head)
         self.W_K = nn.Linear(self.config.d_hidn, self.config.n_head * self.config.d_head)
         self.W_V = nn.Linear(self.config.d_hidn, self.config.n_head * self.config.d_head)
-        self.scaled_dot_attn = ScaledDotProductAttention(self.config)
+        self.scaled_dot_attn = MultiHeadAttention.ScaledDotProductAttention(self.config)
         self.linear = nn.Linear(self.config.n_head * self.config.d_head, self.config.d_hidn)
         self.dropout = nn.Dropout(config.dropout)
 
@@ -117,32 +116,31 @@ class PoswiseFeedForwardNet(nn.Module):
         return output
 
 
-class EncoderLayer(nn.Module):
-    """ encoder layer """
-
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-
-        self.self_attn = MultiHeadAttention(self.config)
-        self.layer_norm1 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
-        self.pos_ffn = PoswiseFeedForwardNet(self.config)
-        self.layer_norm2 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
-
-    def forward(self, inputs, attn_mask):
-        # inputs=
-        # (bs, n_enc_seq, d_hidn), (bs, n_head, n_enc_seq, n_enc_seq)
-        att_outputs, attn_prob = self.self_attn(inputs, inputs, inputs, attn_mask)
-        att_outputs = self.layer_norm1(inputs + att_outputs)
-        # (bs, n_enc_seq, d_hidn)
-        ffn_outputs = self.pos_ffn(att_outputs)
-        ffn_outputs = self.layer_norm2(ffn_outputs + att_outputs)
-        # (bs, n_enc_seq, d_hidn), (bs, n_head, n_enc_seq, n_enc_seq)
-        return ffn_outputs, attn_prob
-
-
 class Encoder(nn.Module):
     """ encoder layer """
+
+    class EncoderLayer(nn.Module):
+        """ encoder layer """
+
+        def __init__(self, config):
+            super().__init__()
+            self.config = config
+
+            self.self_attn = MultiHeadAttention(self.config)
+            self.layer_norm1 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
+            self.pos_ffn = PoswiseFeedForwardNet(self.config)
+            self.layer_norm2 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
+
+        def forward(self, inputs, attn_mask):
+            # inputs=
+            # (bs, n_enc_seq, d_hidn), (bs, n_head, n_enc_seq, n_enc_seq)
+            att_outputs, attn_prob = self.self_attn(inputs, inputs, inputs, attn_mask)
+            att_outputs = self.layer_norm1(inputs + att_outputs)
+            # (bs, n_enc_seq, d_hidn)
+            ffn_outputs = self.pos_ffn(att_outputs)
+            ffn_outputs = self.layer_norm2(ffn_outputs + att_outputs)
+            # (bs, n_enc_seq, d_hidn), (bs, n_head, n_enc_seq, n_enc_seq)
+            return ffn_outputs, attn_prob
 
     def __init__(self, config):
         super().__init__()
@@ -152,12 +150,12 @@ class Encoder(nn.Module):
         sinusoid_table = torch.FloatTensor(get_sinusoid_encoding_table(self.config.n_enc_seq + 1, self.config.d_hidn))
         self.pos_emb = nn.Embedding.from_pretrained(sinusoid_table, freeze=True)
 
-        self.layers = nn.ModuleList([EncoderLayer(self.config) for _ in range(self.config.n_layer)])
+        self.layers = nn.ModuleList([Encoder.EncoderLayer(self.config) for _ in range(self.config.n_layer)])
 
     def forward(self, inputs):
         # inputs=(bs, n_enc_seq_in_data) # 단, n_enc_seq_in_data <= n_enc_seq
         bs, n_enc_seq_in_data = inputs.size()
-        positions = torch.arange(n_enc_seq_in_data, device=inputs.device, dtype=inputs.dtype).expand(bs, n_enc_seq_in_data).contiguous() + 1  # TODO: 왜 굳이 시작을 1부터 했을까?
+        positions = torch.arange(n_enc_seq_in_data, device=inputs.device, dtype=inputs.dtype).expand(bs, n_enc_seq_in_data).contiguous() + 1  # [PAD] token -> position=0, 실제 token들은 position=1부터 사용.
         pos_mask = inputs.eq(self.config.i_pad)
         positions.masked_fill_(pos_mask, 0)
 
@@ -169,43 +167,42 @@ class Encoder(nn.Module):
 
         attn_probs = []
         for layer in self.layers:
-            # (bs, n_enc_seq, d_hidn), (bs, n_head, n_enc_seq, n_enc_seq)
+            # outputs=(bs, n_enc_seq, d_hidn), attn_prob=(bs, n_head, n_enc_seq, n_enc_seq)
             outputs, attn_prob = layer(outputs, attn_mask)
             attn_probs.append(attn_prob)
-        # (bs, n_enc_seq, d_hidn), [(bs, n_head, n_enc_seq, n_enc_seq)]
+        # outputs=(bs, n_enc_seq, d_hidn), attn_probs=n_layer*(bs, n_head, n_enc_seq, n_enc_seq)
         return outputs, attn_probs
-
-
-class DecoderLayer(nn.Module):
-    """ decoder layer """
-
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-
-        self.self_attn = MultiHeadAttention(self.config)
-        self.layer_norm1 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
-        self.dec_enc_attn = MultiHeadAttention(self.config)
-        self.layer_norm2 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
-        self.pos_ffn = PoswiseFeedForwardNet(self.config)
-        self.layer_norm3 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
-
-    def forward(self, dec_inputs, enc_outputs, self_attn_mask, dec_enc_attn_mask):
-        # (bs, n_dec_seq, d_hidn), (bs, n_head, n_dec_seq, n_dec_seq)
-        self_att_outputs, self_attn_prob = self.self_attn(dec_inputs, dec_inputs, dec_inputs, self_attn_mask)
-        self_att_outputs = self.layer_norm1(dec_inputs + self_att_outputs)
-        # (bs, n_dec_seq, d_hidn), (bs, n_head, n_dec_seq, n_enc_seq)
-        dec_enc_att_outputs, dec_enc_attn_prob = self.dec_enc_attn(self_att_outputs, enc_outputs, enc_outputs, dec_enc_attn_mask)
-        dec_enc_att_outputs = self.layer_norm2(self_att_outputs + dec_enc_att_outputs)
-        # (bs, n_dec_seq, d_hidn)
-        ffn_outputs = self.pos_ffn(dec_enc_att_outputs)
-        ffn_outputs = self.layer_norm3(dec_enc_att_outputs + ffn_outputs)
-        # (bs, n_dec_seq, d_hidn), (bs, n_head, n_dec_seq, n_dec_seq), (bs, n_head, n_dec_seq, n_enc_seq)
-        return ffn_outputs, self_attn_prob, dec_enc_attn_prob
 
 
 class Decoder(nn.Module):
     """ decoder """
+
+    class DecoderLayer(nn.Module):
+        """ decoder layer """
+
+        def __init__(self, config):
+            super().__init__()
+            self.config = config
+
+            self.self_attn = MultiHeadAttention(self.config)
+            self.layer_norm1 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
+            self.dec_enc_attn = MultiHeadAttention(self.config)
+            self.layer_norm2 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
+            self.pos_ffn = PoswiseFeedForwardNet(self.config)
+            self.layer_norm3 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
+
+        def forward(self, dec_inputs, enc_outputs, self_attn_mask, dec_enc_attn_mask):
+            # (bs, n_dec_seq, d_hidn), (bs, n_head, n_dec_seq, n_dec_seq)
+            self_att_outputs, self_attn_prob = self.self_attn(dec_inputs, dec_inputs, dec_inputs, self_attn_mask)
+            self_att_outputs = self.layer_norm1(dec_inputs + self_att_outputs)
+            # (bs, n_dec_seq, d_hidn), (bs, n_head, n_dec_seq, n_enc_seq)
+            dec_enc_att_outputs, dec_enc_attn_prob = self.dec_enc_attn(self_att_outputs, enc_outputs, enc_outputs, dec_enc_attn_mask)
+            dec_enc_att_outputs = self.layer_norm2(self_att_outputs + dec_enc_att_outputs)
+            # (bs, n_dec_seq, d_hidn)
+            ffn_outputs = self.pos_ffn(dec_enc_att_outputs)
+            ffn_outputs = self.layer_norm3(dec_enc_att_outputs + ffn_outputs)
+            # (bs, n_dec_seq, d_hidn), (bs, n_head, n_dec_seq, n_dec_seq), (bs, n_head, n_dec_seq, n_enc_seq)
+            return ffn_outputs, self_attn_prob, dec_enc_attn_prob
 
     def __init__(self, config):
         super().__init__()
@@ -215,7 +212,7 @@ class Decoder(nn.Module):
         sinusoid_table = torch.FloatTensor(get_sinusoid_encoding_table(self.config.n_dec_seq + 1, self.config.d_hidn))
         self.pos_emb = nn.Embedding.from_pretrained(sinusoid_table, freeze=True)
 
-        self.layers = nn.ModuleList([DecoderLayer(self.config) for _ in range(self.config.n_layer)])
+        self.layers = nn.ModuleList([Decoder.DecoderLayer(self.config) for _ in range(self.config.n_layer)])
 
     def forward(self, dec_inputs, enc_inputs, enc_outputs):
         positions = torch.arange(dec_inputs.size(1), device=dec_inputs.device, dtype=dec_inputs.dtype).expand(dec_inputs.size(0), dec_inputs.size(1)).contiguous() + 1

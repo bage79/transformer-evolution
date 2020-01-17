@@ -6,7 +6,7 @@ import sys
 import pandas as pd
 import sentencepiece as spm
 
-from config import IS_DEBUG
+from config import IS_MAC
 
 
 def build_corpus(downloaded_file, corpus_file):
@@ -49,7 +49,7 @@ def load_vocab(file):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default="data" if not IS_DEBUG else "data_sample", type=str, required=False,
+    parser.add_argument("--data_dir", default="data" if not IS_MAC else "data_sample", type=str, required=False,
                         help="a data directory which have downloaded, corpus text, vocab files.")
     parser.add_argument("--vocab_size", default=8000, type=int, required=False,
                         help="max vocab size")

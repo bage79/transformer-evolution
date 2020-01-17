@@ -1,25 +1,24 @@
-import sys
-sys.path.append("..")
-import os, argparse, datetime, time, re, collections, random
-from tqdm import tqdm, trange
-import numpy as np
-import wandb
+import argparse
+import os
+import random
 
+import numpy as np
 import torch
 import torch.distributed as dist
-import torch.nn as nn
 import torch.multiprocessing as mp
+import wandb
 from torch.nn.parallel import DistributedDataParallel
+from tqdm import tqdm, trange
 
-from vocab import load_vocab
 import config as cfg
-import model as albert
 import data
 import optimization as optim
+from vocab import load_vocab
+from . import model as albert
 
 
-""" random seed """
 def set_seed(args):
+    """ random seed """
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -27,20 +26,20 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
-""" init_process_group """ 
 def init_process_group(rank, world_size):
+    """ init_process_group """
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
 
-""" destroy_process_group """
 def destroy_process_group():
+    """ destroy_process_group """
     dist.destroy_process_group()
 
 
-""" 모델 epoch 평가 """
 def eval_epoch(config, rank, model, data_loader):
+    """ 모델 epoch 평가 """
     matchs = []
     model.eval()
 
@@ -63,8 +62,8 @@ def eval_epoch(config, rank, model, data_loader):
     return np.sum(matchs) / len(matchs) if 0 < len(matchs) else 0
 
 
-""" 모델 epoch 학습 """
 def train_epoch(config, rank, epoch, model, criterion_cls, optimizer, scheduler, train_loader):
+    """ 모델 epoch 학습 """
     losses = []
     model.train()
 
@@ -91,12 +90,13 @@ def train_epoch(config, rank, epoch, model, criterion_cls, optimizer, scheduler,
     return np.mean(losses)
 
 
-""" 모델 학습 """
 def train_model(rank, world_size, args):
+    """ 모델 학습 """
     if 1 < args.n_gpu:
         init_process_group(rank, world_size)
     master = (world_size == 0 or rank % world_size == 0)
-    if master: wandb.init(project="transformer-evolution")
+    if master and args.wandb:
+        wandb.init(project="transformer-evolution")
 
     vocab = load_vocab(args.vocab)
 
@@ -118,7 +118,8 @@ def train_model(rank, world_size, args):
         model = DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
     else:
         model.to(config.device)
-    if master: wandb.watch(model)
+    if master and args.wandb:
+        wandb.watch(model)
 
     criterion_cls = torch.nn.CrossEntropyLoss()
 
@@ -142,7 +143,8 @@ def train_model(rank, world_size, args):
 
         loss = train_epoch(config, rank, epoch, model, criterion_cls, optimizer, scheduler, train_loader)
         score = eval_epoch(config, rank, model, test_loader)
-        if master: wandb.log({"loss": loss, "accuracy": score})
+        if master and args.wandb:
+            wandb.log({"loss": loss, "accuracy": score})
 
         if master and best_score < score:
             best_epoch, best_loss, best_score = epoch, loss, score
@@ -188,9 +190,8 @@ if __name__ == '__main__':
 
     if 1 < args.n_gpu:
         mp.spawn(train_model,
-             args=(args.n_gpu, args),
-             nprocs=args.n_gpu,
-             join=True)
+                 args=(args.n_gpu, args),
+                 nprocs=args.n_gpu,
+                 join=True)
     else:
         train_model(0 if args.gpu is None else args.gpu, args.n_gpu, args)
-

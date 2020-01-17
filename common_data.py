@@ -5,7 +5,7 @@ import os
 import pandas as pd
 import wget
 
-from config import IS_DEBUG
+from config import IS_MAC
 from vocab import load_vocab, build_corpus
 
 
@@ -35,7 +35,7 @@ def download_data(data_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default="data" if not IS_DEBUG else "data_sample", type=str, required=False,
+    parser.add_argument("--data_dir", default="data" if not IS_MAC else "data_sample", type=str, required=False,
                         help="a data directory which have downloaded, corpus text, vocab files.")
     args = parser.parse_args()
     args.data_dir = os.path.join(os.getcwd(), args.data_dir)
