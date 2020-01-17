@@ -44,9 +44,6 @@ def eval_epoch(config, rank, classification: MovieClassification, data_loader):
     matchs = []
     classification.eval()
 
-    n_word_total = 0
-    n_correct_total = 0
-    # with tqdm(total=len(data_loader), desc=f"Valid({rank})") as pbar:
     for i, value in enumerate(data_loader):
         labels, enc_inputs, dec_inputs = map(lambda v: v.to(config.device), value)
 
@@ -57,9 +54,6 @@ def eval_epoch(config, rank, classification: MovieClassification, data_loader):
         match = torch.eq(indices, labels).detach()
         matchs.extend(match.cpu())
         accuracy = np.sum(matchs) / len(matchs) if 0 < len(matchs) else 0
-
-        # pbar.update(1)
-        # pbar.set_postfix_str(f"Acc: {accuracy:.3f}")
     return accuracy
 
 
@@ -96,7 +90,7 @@ def train_model(rank, world_size, args):
         init_process_group(rank, world_size)
     master = (world_size == 0 or rank % world_size == 0)
     if master and args.wandb:
-        wandb.init(project="transformer-evolution-bage")
+        wandb.init(project="transformer-evolution-bage", resume=args.name, name=args.name)
 
     vocab = load_vocab(args.vocab)
 
@@ -109,7 +103,7 @@ def train_model(rank, world_size, args):
     model: MovieClassification = transformer.MovieClassification(config)
     if os.path.isfile(args.save):
         best_epoch, best_loss, best_score = model.load(args.save)
-        print(f"rank: {rank} load state dict from: {args.save}")
+        print(f"rank: {rank}, last epoch: {best_epoch} load state dict from: {os.path.basename(args.save)}")
     if 1 < args.n_gpu:
         model.to(config.device)
         model = DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
@@ -120,8 +114,8 @@ def train_model(rank, world_size, args):
 
     criterion = torch.nn.CrossEntropyLoss()
 
-    train_loader, train_sampler = data.build_data_loader(vocab, os.path.abspath(os.path.join(os.getcwd(), args.data_dir, "ratings_train.json")), args, shuffle=True)
-    test_loader, _ = data.build_data_loader(vocab, os.path.abspath(os.path.join(os.getcwd(), args.data_dir, "ratings_test.json")), args, shuffle=False)
+    train_loader, train_sampler = data.build_data_loader(rank, vocab, os.path.abspath(os.path.join(os.getcwd(), args.data_dir, "ratings_train.json")), args, shuffle=True)
+    test_loader, _ = data.build_data_loader(rank, vocab, os.path.abspath(os.path.join(os.getcwd(), args.data_dir, "ratings_test.json")), args, shuffle=False)
 
     t_total = len(train_loader) * args.epoch  # t_total=총 backward() 회수
     no_decay = ['bias', 'LayerNorm.weight']
@@ -132,26 +126,27 @@ def train_model(rank, world_size, args):
     optimizer = optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = optim.get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total)
 
-    offset = best_epoch
-    with tqdm(total=args.epoch, desc=f"Epoch", position=0) as pbar:
-        for step in range(args.epoch):
+    with tqdm(initial=best_epoch + 1, total=args.epoch, position=0) as pbar:
+        for epoch in range(best_epoch + 1, args.epoch + 1):
             if train_sampler:
-                train_sampler.set_epoch(step)
-            epoch = step + offset
+                train_sampler.set_epoch(epoch)
 
             loss = train_epoch(config, rank, epoch, model, criterion, optimizer, scheduler, train_loader)
             score = eval_epoch(config, rank, model, test_loader)
             if master and args.wandb:
-                wandb.log({"loss": loss, "accuracy": score})
+                wandb.log(row={"train loss": loss, "accuracy": score}, step=epoch)
 
-            if master and best_score < score:
-                best_epoch, best_loss, best_score = epoch, loss, score
-                pbar.set_description(f'Best (score={best_score:.3f}, epoch={best_epoch})')
-                if isinstance(model, DistributedDataParallel):
-                    model.module.save(best_epoch, best_loss, best_score, args.save)
+            if master:
+                if best_score < score:
+                    best_epoch, best_loss, best_score = epoch, loss, score
+                    pbar.set_description(f'Best (score={best_score:.3f}, epoch={best_epoch})')
+                    if isinstance(model, DistributedDataParallel):
+                        model.module.save(best_epoch, best_loss, best_score, args.save)
+                    else:
+                        model.save(best_epoch, best_loss, best_score, args.save)
                 else:
-                    model.save(best_epoch, best_loss, best_score, args.save)
-                # print(f">>>> rank: {rank} save model to {os.path.basename(args.save)}, epoch={best_epoch}, loss={best_loss:.3f}, score={best_score:.3f}")
+                    if best_epoch + 5 < epoch:  # early stop
+                        break
 
             pbar.update()
 
@@ -169,7 +164,7 @@ if __name__ == '__main__':
     parser.add_argument("--config", default="config_half.json", type=str, required=False,
                         help="config file")
     parser.add_argument("--epoch", default=20 if not IS_MAC else 4, type=int, required=False,
-                        help="epoch")
+                        help="max epoch")
     parser.add_argument("--batch", default=256 if not IS_MAC else 4, type=int, required=False,
                         help="batch")  # batch=256 for Titan XP, batch=512 for V100
     parser.add_argument("--gpu", default=None, type=int, required=False,
@@ -185,7 +180,7 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_steps', type=float, default=0, required=False,
                         help="warmup steps")
     args = parser.parse_args()
-    args.name = f'{os.path.basename(args.data_dir)}.{os.path.basename(args.config).replace(".json", "")}.batch.{args.batch}.epoch.{args.epoch}'
+    args.name = f'transformer.{os.path.basename(args.data_dir)}.{os.path.basename(args.config).replace(".json", "")}.batch.{args.batch}'  # .epoch.{args.epoch}'
     args.vocab = os.path.abspath(os.path.join(os.getcwd(), args.data_dir, args.vocab))
     args.save = os.path.abspath(os.path.join(os.getcwd(), "save", f'{args.name}.pth'))
     print(args)
