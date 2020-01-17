@@ -37,24 +37,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", default="data" if not IS_DEBUG else "data_sample", type=str, required=False,
                         help="a data directory which have downloaded, corpus text, vocab files.")
-    parser.add_argument("--mode", default="prepare", type=str, required=False,
-                        help="동작모드 입니다. download: 학습할 데이터 다운로드, prepare: 학습할 데이터셋 생성")
     args = parser.parse_args()
+    args.data_dir = os.path.join(os.getcwd(), args.data_dir)
+    print(args)
 
     if not os.path.exists("data"):
         os.makedirs("data")
 
-    if args.mode == "download":
-        download_data(args)
-    elif args.mode == "prepare":
-        vocab = load_vocab(os.path.join(args.data_dir, "kowiki.model"))
-        args.corpus = os.path.join(args.data_dir, "kowiki.txt")
-        if not os.path.isfile(args.corpus):
-            build_corpus(os.path.join(args.data_dir, "kowiki.csv"), args.corpus)
-        if not os.path.isfile(os.path.join(args.data_dir, "ratings_train.json")):
-            prepare_train(args, vocab, os.path.join(args.data_dir, "ratings_train.txt"), os.path.join(args.data_dir, "ratings_train.json"))
-        if not os.path.isfile(os.path.join(args.data_dir, "ratings_test.json")):
-            prepare_train(args, vocab, os.path.join(args.data_dir, "ratings_test.txt"), os.path.join(args.data_dir, "ratings_test.json"))
-    else:
-        print(f"지원하지 않는 모드 입니다. {args.mode}\n- downlaod: 학습할 데이터 다운로드\n- preapre: 학습할 데이터셋 생성")
-        exit(1)
+    if not os.path.isfile(os.path.join(args.data_dir, "ratings_train.json")) or not os.path.isfile(os.path.join(args.data_dir, "ratings_test.json")):
+        download_data(args.data_dir)
+
+    vocab = load_vocab(os.path.join(args.data_dir, "kowiki.model"))
+    if not os.path.isfile(os.path.join(args.data_dir, "ratings_train.json")):
+        prepare_train(args, vocab, os.path.join(args.data_dir, "ratings_train.txt"), os.path.join(args.data_dir, "ratings_train.json"))
+    if not os.path.isfile(os.path.join(args.data_dir, "ratings_test.json")):
+        prepare_train(args, vocab, os.path.join(args.data_dir, "ratings_test.txt"), os.path.join(args.data_dir, "ratings_test.json"))

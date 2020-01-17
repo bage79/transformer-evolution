@@ -49,18 +49,26 @@ def load_vocab(file):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default="data_sample" if not IS_DEBUG else "data_sample", type=str, required=False,
+    parser.add_argument("--data_dir", default="data" if not IS_DEBUG else "data_sample", type=str, required=False,
                         help="a data directory which have downloaded, corpus text, vocab files.")
     parser.add_argument("--vocab_size", default=8000, type=int, required=False,
                         help="max vocab size")
     args = parser.parse_args()
+    args.data_dir = os.path.join(os.getcwd(), args.data_dir)
+    print(args)
+
+    if not os.path.exists("data"):
+        os.makedirs("data")
 
     for downloaded_file in os.listdir(args.data_dir):
         if downloaded_file.endswith('.csv'):
             downloaded_file = os.path.join(args.data_dir, downloaded_file)
-
             corpus_file = downloaded_file.replace('.csv', '.txt')
+            vocab_file = downloaded_file.replace('.csv', '.vocab')
+            vocab_model_file = downloaded_file.replace('.csv', '.model')
+
             prefix = downloaded_file.replace('.csv', '')
             if downloaded_file.endswith('.csv') and not os.path.isfile(corpus_file):
                 build_corpus(downloaded_file, corpus_file)
-            build_vocab(corpus_file, prefix, args.vocab_size)
+            if not os.path.exists(vocab_file) or not os.path.exists(vocab_model_file):
+                build_vocab(corpus_file, prefix, args.vocab_size)

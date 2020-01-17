@@ -9,12 +9,6 @@ pip install -r requirements.txt
 ```
 
 
-## train data 준비
-- [Naver Movie](https://movie.naver.com/movie/point/af/list.nhn) 데이터를 사용 했습니다.
-```sh
-python common_data.py --mode download
-```
-- data 폴더 아래 'ratings_test.txt', 'ratings_train.txt' 두개의 파일을 다운로드 합니다.
 
 
 ## pretrain data 준비
@@ -39,10 +33,12 @@ python vocab.py
 ## data 생성
 - pretrain 및 train data를 모델에서 사용하기 좋은 형태로 미리 만들어 놓습니다.
 - 세부 처리는 각 모델에서 필요에 따라 처리 합니다.
+- [Naver Movie](https://movie.naver.com/movie/point/af/list.nhn) 데이터를 사용 했습니다.
 ```sh
-python common_data.py --mode prepare
+python common_data.py
 ```
-- data 폴더 아래 'kowiki.json' 파일이 생성 됩니다.
+1. data 폴더 아래 'ratings_test.txt', 'ratings_train.txt' 두개의 파일을 다운로드 합니다.
+1. data 폴더 아래 'kowiki.json' 파일이 생성 됩니다.
 
 
 ## 기타
