@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import os
 import random
 
@@ -57,7 +58,7 @@ def eval_epoch(config, rank, classification: MovieClassification, data_loader):
     return accuracy
 
 
-def train_epoch(config, rank, epoch, classification: MovieClassification, criterion, optimizer, scheduler, train_loader):
+def train_epoch(args, config, rank, epoch, classification: MovieClassification, criterion, optimizer, scheduler, train_loader):
     """ 모델 epoch 학습 """
     losses = []
     classification.train()
@@ -67,20 +68,21 @@ def train_epoch(config, rank, epoch, classification: MovieClassification, criter
             # labels=(bs), enc_inputs=(bs, n_enc_seq), dec_inputs=(bs, n_dec_seq)
             labels, enc_inputs, dec_inputs = map(lambda v: v.to(config.device), value)  # (bs), (bs, max_sequence_len), (bs, 1)
 
-            optimizer.zero_grad()
             outputs = classification(enc_inputs, dec_inputs)
             logits = outputs[0]  # logits=(bs, n_outputs)
 
-            loss = criterion(logits, labels)
-            loss_val = loss.item()
-            losses.append(loss_val)
+            loss = criterion(logits, labels)  # labels=(bs)
+            if args.gradient_accumulation > 1:
+                loss /= args.gradient_accumulation
+            losses.append(loss.item())
+            pbar.update(1)
+            pbar.set_postfix_str(f"Loss: {loss.item():.3f} ({np.mean(losses):.3f})")
 
             loss.backward()
-            optimizer.step()
-            scheduler.step()
-
-            pbar.update(1)
-            pbar.set_postfix_str(f"Loss: {loss_val:.3f} ({np.mean(losses):.3f})")
+            if len(losses) % args.gradient_accumulation == 0:
+                scheduler.step()
+                optimizer.step()
+                optimizer.zero_grad()
     return np.mean(losses)
 
 
@@ -90,7 +92,7 @@ def train_model(rank, world_size, args):
         init_process_group(rank, world_size)
     master = (world_size == 0 or rank % world_size == 0)
     if master and args.wandb:
-        wandb.init(project="transformer-evolution-bage", resume=args.name, name=args.name)
+        wandb.init(project="transformer-evolution-bage", resume=args.name)
 
     vocab = load_vocab(args.vocab)
 
@@ -131,9 +133,10 @@ def train_model(rank, world_size, args):
             if train_sampler:
                 train_sampler.set_epoch(epoch)
 
-            loss = train_epoch(config, rank, epoch, model, criterion, optimizer, scheduler, train_loader)
+            loss = train_epoch(args, config, rank, epoch, model, criterion, optimizer, scheduler, train_loader)
             score = eval_epoch(config, rank, model, test_loader)
             if master and args.wandb:
+                wandb.config.update(args)
                 wandb.log(row={"train loss": loss, "accuracy": score}, step=epoch)
 
             if master:
@@ -150,6 +153,7 @@ def train_model(rank, world_size, args):
 
             pbar.update()
 
+    wandb.save(args.name)
     if 1 < args.n_gpu:
         destroy_process_group()
 
@@ -165,6 +169,8 @@ if __name__ == '__main__':
                         help="config file")
     parser.add_argument("--epoch", default=20 if not IS_MAC else 4, type=int, required=False,
                         help="max epoch")
+    parser.add_argument("--gradient_accumulation", default=1, type=int, required=False,
+                        help="real batch size = gradient_accumulation_steps * batch")  # FIXME:
     parser.add_argument("--batch", default=256 if not IS_MAC else 4, type=int, required=False,
                         help="batch")  # batch=256 for Titan XP, batch=512 for V100
     parser.add_argument("--gpu", default=None, type=int, required=False,
@@ -180,7 +186,11 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_steps', type=float, default=0, required=False,
                         help="warmup steps")
     args = parser.parse_args()
-    args.name = f'transformer.{os.path.basename(args.data_dir)}.{os.path.basename(args.config).replace(".json", "")}.batch.{args.batch}'  # .epoch.{args.epoch}'
+
+    # same wandb run_id cause Error 1062: Duplicate entry
+    now = datetime.datetime.now()
+    args.name = f'transformer.{os.path.basename(args.data_dir)}.{os.path.basename(args.config).replace(".json", "")}.batch.{args.batch * args.gradient_accumulation}.date.{now.year:4d}{now.month:02d}{now.day:02d}{now.hour:02d}{now.minute:02d}'
+
     args.vocab = os.path.abspath(os.path.join(os.getcwd(), args.data_dir, args.vocab))
     args.save = os.path.abspath(os.path.join(os.getcwd(), "save", f'{args.name}.pth'))
     print(args)
