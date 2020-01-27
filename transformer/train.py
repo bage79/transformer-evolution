@@ -72,8 +72,8 @@ def train_epoch(args, config, rank, epoch, classification: MovieClassification, 
             logits = outputs[0]  # logits=(bs, n_outputs)
 
             loss = criterion(logits, labels)  # labels=(bs)
-            if args.gradient_accumulation > 1:
-                loss /= args.gradient_accumulation
+            # if args.gradient_accumulation > 1:
+            #     loss /= args.gradient_accumulation
             losses.append(loss.item())
             pbar.update(1)
             pbar.set_postfix_str(f"Loss: {loss.item():.3f} ({np.mean(losses):.3f})")
