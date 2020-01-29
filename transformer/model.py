@@ -29,13 +29,6 @@ def get_attn_pad_mask(seq_q, seq_k, i_pad):
     return pad_attn_mask  # (bs, seq_q_len, seq_k_len)=(bs, seq_len, seq_len)
 
 
-def get_attn_decoder_mask(seq):
-    """ attention decoder mask """
-    subsequent_mask = torch.ones_like(seq).unsqueeze(-1).expand(seq.size(0), seq.size(1), seq.size(1))
-    subsequent_mask = subsequent_mask.triu(diagonal=1)  # upper triangular part of a matrix(2-D)
-    return subsequent_mask
-
-
 class MultiHeadAttention(nn.Module):
     """ multi head attention """
 
@@ -153,13 +146,13 @@ class Encoder(nn.Module):
         self.layers = nn.ModuleList([Encoder.EncoderLayer(self.config) for _ in range(self.config.n_layer)])
 
     def forward(self, inputs):
-        # inputs=(bs, n_enc_seq_in_data) # 단, n_enc_seq_in_data <= n_enc_seq
-        bs, n_enc_seq_in_data = inputs.size()
-        positions = torch.arange(n_enc_seq_in_data, device=inputs.device, dtype=inputs.dtype).expand(bs, n_enc_seq_in_data).contiguous() + 1  # [PAD] token -> position=0, 실제 token들은 position=1부터 사용.
-        pos_mask = inputs.eq(self.config.i_pad)
-        positions.masked_fill_(pos_mask, 0)
+        bs, n_enc_seq_in_data = inputs.size()  # inputs=(bs, n_enc_seq_in_data) # 단, n_enc_seq_in_data <= n_enc_seq
+        # positions=(bs, n_enc_seq_in_data) # [0, 1, ..., n_enc_seq_in_data-1] -> [1, 2, ..., n_enc_seq_in_data]
+        positions = torch.arange(n_enc_seq_in_data, device=inputs.device, dtype=inputs.dtype).expand(bs, n_enc_seq_in_data).contiguous() + 1
+        pos_mask = inputs.eq(self.config.i_pad)  # pos_mask=[False, ..., False, True, True, True]
+        positions.masked_fill_(pos_mask, 0)  # PAD 위치는 모두 0으로 치환딤.
 
-        # (bs, n_enc_seq, d_hidn)
+        # (bs, n_enc_seq, d_hidn) # transformer에서는 embedding_dim=d_hidn
         outputs = self.enc_emb(inputs) + self.pos_emb(positions)
 
         # (bs, n_enc_seq, n_enc_seq)
@@ -204,6 +197,13 @@ class Decoder(nn.Module):
             # (bs, n_dec_seq, d_hidn), (bs, n_head, n_dec_seq, n_dec_seq), (bs, n_head, n_dec_seq, n_enc_seq)
             return ffn_outputs, self_attn_prob, dec_enc_attn_prob
 
+    @staticmethod
+    def get_attn_decoder_mask(seq):
+        """ attention decoder mask """
+        subsequent_mask = torch.ones_like(seq).unsqueeze(-1).expand(seq.size(0), seq.size(1), seq.size(1))
+        subsequent_mask = subsequent_mask.triu(diagonal=1)  # upper triangular part of a matrix(2-D)
+        return subsequent_mask
+
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -225,7 +225,7 @@ class Decoder(nn.Module):
         # (bs, n_dec_seq, n_dec_seq)
         dec_attn_pad_mask = get_attn_pad_mask(dec_inputs, dec_inputs, self.config.i_pad)
         # (bs, n_dec_seq, n_dec_seq)
-        dec_attn_decoder_mask = get_attn_decoder_mask(dec_inputs)
+        dec_attn_decoder_mask = Decoder.get_attn_decoder_mask(dec_inputs)
         # (bs, n_dec_seq, n_dec_seq)
         dec_self_attn_mask = torch.gt((dec_attn_pad_mask + dec_attn_decoder_mask), 0)
         # (bs, n_dec_seq, n_enc_seq)

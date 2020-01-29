@@ -92,7 +92,7 @@ def train_model(rank, world_size, args):
         init_process_group(rank, world_size)
     master = (world_size == 0 or rank % world_size == 0)
     if master and args.wandb:
-        wandb.init(project="transformer-evolution-bage", resume=args.name)
+        wandb.init(project=args.project, resume=args.name, tags=args.tags)
 
     vocab = load_vocab(args.vocab)
 
@@ -160,31 +160,33 @@ def train_model(rank, world_size, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wandb", default=False, type=bool, required=False, help="logging to wandb or not")
-    parser.add_argument("--data_dir", default="../data" if not IS_MAC else "../data_sample", type=str, required=False,
-                        help="a data directory which have downloaded, corpus text, vocab files.")
-    parser.add_argument("--vocab", default="kowiki.model", type=str, required=False,
-                        help="vocab file")
-    parser.add_argument("--config", default="config_half.json", type=str, required=False,
-                        help="config file")
-    parser.add_argument("--epoch", default=20 if not IS_MAC else 4, type=int, required=False,
-                        help="max epoch")
-    parser.add_argument("--gradient_accumulation", default=1, type=int, required=False,
-                        help="real batch size = gradient_accumulation_steps * batch")  # FIXME:
-    parser.add_argument("--batch", default=256 if not IS_MAC else 4, type=int, required=False,
-                        help="batch")  # batch=256 for Titan XP, batch=512 for V100
-    parser.add_argument("--gpu", default=None, type=int, required=False,
-                        help="GPU id to use.")
+    parser.add_argument('--data_dir', default='../data' if not IS_MAC else '../data_sample', type=str, required=False,
+                        help='a data directory which have downloaded, corpus text, vocab files.')
+    parser.add_argument('--vocab', default='kowiki.model', type=str, required=False,
+                        help='vocab file')
+    parser.add_argument('--config', default='config_half.json', type=str, required=False,
+                        help='config file')
+    parser.add_argument('--epoch', default=20 if not IS_MAC else 4, type=int, required=False,
+                        help='max epoch')
+    parser.add_argument('--gradient_accumulation', default=1, type=int, required=False,
+                        help='real batch size = gradient_accumulation_steps * batch')
+    parser.add_argument('--batch', default=256 if not IS_MAC else 4, type=int, required=False,
+                        help='batch')  # batch=256 for Titan XP, batch=512 for V100
+    parser.add_argument('--gpu', default=None, type=int, required=False,
+                        help='GPU id to use.')
     parser.add_argument('--seed', type=int, default=42, required=False,
-                        help="random seed for initialization")
+                        help='random seed for initialization')
     parser.add_argument('--weight_decay', type=float, default=0, required=False,
-                        help="weight decay")
+                        help='weight decay')
     parser.add_argument('--learning_rate', type=float, default=5e-5, required=False,
-                        help="learning rate")
+                        help='learning rate')
     parser.add_argument('--adam_epsilon', type=float, default=1e-8, required=False,
-                        help="adam epsilon")
+                        help='adam epsilon')
     parser.add_argument('--warmup_steps', type=float, default=0, required=False,
-                        help="warmup steps")
+                        help='warmup steps')
+    parser.add_argument('--wandb', default=False, type=bool, required=False, help='logging to wandb or not')
+    parser.add_argument('--project', default='transformer-evolution-bage', type=str, required=False, help='project name for wandb')
+    parser.add_argument('--tags', default=['transformer'], type=list, required=False, help='tags for wandb')
     args = parser.parse_args()
 
     # same wandb run_id cause Error 1062: Duplicate entry
