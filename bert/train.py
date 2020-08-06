@@ -13,9 +13,8 @@ from tqdm import tqdm, trange
 import config as cfg
 import optimization as optim
 from vocab import load_vocab
-from . import data
-from . import model as bert
-
+from bert import data
+from bert import model as bert
 
 def set_seed(args):
     """ random seed """
@@ -189,6 +188,7 @@ if __name__ == '__main__':
                         help="adam epsilon")
     parser.add_argument('--warmup_steps', type=float, default=0, required=False,
                         help="warmup steps")
+    parser.add_argument('--wandb', default=False, type=bool, required=False, help='logging to wandb or not')
     args = parser.parse_args()
 
     if torch.cuda.is_available():
@@ -203,4 +203,4 @@ if __name__ == '__main__':
                  nprocs=args.n_gpu,
                  join=True)
     else:
-        train_model(0 if args.gpu is None else args.gpu, args.n_gpu, args)
+        train_model(rank=0 if args.gpu is None else args.gpu, world_size=args.n_gpu, args=args)

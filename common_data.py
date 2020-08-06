@@ -48,6 +48,8 @@ if __name__ == "__main__":
         download_data(args.data_dir)
 
     vocab = load_vocab(os.path.join(args.data_dir, "kowiki.model"))
+    if not os.path.isfile(os.path.join(args.data_dir, "kowiki.json")):
+        prepare_train(args, vocab, os.path.join(args.data_dir, "kowiki.csv"), os.path.join(args.data_dir, "kowiki.json"))
     if not os.path.isfile(os.path.join(args.data_dir, "ratings_train.json")):
         prepare_train(args, vocab, os.path.join(args.data_dir, "ratings_train.txt"), os.path.join(args.data_dir, "ratings_train.json"))
     if not os.path.isfile(os.path.join(args.data_dir, "ratings_test.json")):

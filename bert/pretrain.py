@@ -12,8 +12,8 @@ from torch.nn.parallel import DistributedDataParallel
 
 from vocab import load_vocab
 import config as cfg
-from . import model as bert
-from . import data
+from bert import model as bert
+from bert import data
 import optimization as optim
 
 
@@ -132,11 +132,13 @@ def train_model(rank, world_size, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--data_dir', default='../data' if not cfg.IS_MAC else '../data_sample', type=str, required=False,
+                        help='a data directory which have downloaded, corpus text, vocab files.')
     parser.add_argument("--config", default="config_half.json", type=str, required=False,
                         help="config file")
-    parser.add_argument("--vocab", default="../kowiki.model", type=str, required=False,
+    parser.add_argument("--vocab", default="kowiki.model", type=str, required=False,
                         help="vocab file")
-    parser.add_argument("--input", default="../data/kowiki_bert_{}.json", type=str, required=False,
+    parser.add_argument("--input", default="kowiki_bert_{}.json", type=str, required=False,
                         help="input pretrain data file")
     parser.add_argument("--count", default=10, type=int, required=False,
                         help="count of pretrain data")
@@ -159,6 +161,7 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_steps', type=float, default=0, required=False,
                         help="warmup steps")
     args = parser.parse_args()
+    args.vocab = os.path.join(os.getcwd(), args.data_dir, args.vocab)
 
     if torch.cuda.is_available():
         args.n_gpu = torch.cuda.device_count() if args.gpu is None else 1
