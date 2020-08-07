@@ -12,7 +12,8 @@ echo "export PATH=\$PATH:/usr/lib/openmpi/lib/" >>~/.profile
 echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/usr/lib/openmpi/lib" >>~/.profile
 
 # test horovod
-cd
+cd workspace
 git clone https://github.com/horovod/horovod
-cd examples
-horovodrun --mpi -np 2 -H localhost:2 python pytorch_mnist.py
+
+cd horovod/examples
+horovodrun --gloo -np 2 -H localhost:2 python pytorch_mnist.py --fp16-allreduce  # --gloo 로 동작함
