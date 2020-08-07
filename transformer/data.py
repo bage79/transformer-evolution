@@ -55,14 +55,9 @@ def build_data_loader(rank, vocab, infile, args, shuffle=True):
     """ 데이터 로더 """
     dataset = MovieDataSet(vocab, infile, rank=rank)
     sampler = None
-    if args.horovod:
-        import horovod.torch as hvd
-        sampler = DistributedSampler(dataset, num_replicas=hvd.size(), rank=hvd.rank())
-        loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, collate_fn=movie_collate_fn)
+    if 1 < args.n_gpu and shuffle:
+        sampler = DistributedSampler(dataset)
+        loader = DataLoader(dataset, batch_size=args.batch, collate_fn=movie_collate_fn, sampler=sampler)
     else:
-        if 1 < args.n_gpu and shuffle:
-            sampler = DistributedSampler(dataset)
-            loader = DataLoader(dataset, batch_size=args.batch, collate_fn=movie_collate_fn, sampler=sampler)
-        else:
-            loader = DataLoader(dataset, batch_size=args.batch, collate_fn=movie_collate_fn, shuffle=shuffle)
+        loader = DataLoader(dataset, batch_size=args.batch, collate_fn=movie_collate_fn, shuffle=shuffle)
     return loader, sampler

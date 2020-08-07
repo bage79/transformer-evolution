@@ -10,6 +10,7 @@ import wandb
 from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from tqdm import tqdm
+import torch.multiprocessing as mp
 
 import optimization
 from config import IS_MAC, Config
@@ -17,9 +18,6 @@ from transformer import data
 from transformer import model as transformer
 from transformer.model import MovieClassification
 from vocab import load_vocab
-
-if not IS_MAC:
-    import horovod.torch as hvd
 
 
 def set_seed(args):
@@ -31,7 +29,7 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
-def init_process_group(args, rank, world_size):
+def init_process_group(rank, world_size):
     """ init_process_group """
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
@@ -43,13 +41,8 @@ def destroy_process_group():
     dist.destroy_process_group()
 
 
-def eval_epoch(args, config, _rank, classification: MovieClassification, test_loader, test_sampler):
+def eval_epoch(config, _rank, classification: MovieClassification, test_loader, test_sampler):
     """ 모델 epoch 평가 """
-
-    def metric_average(val, name):
-        tensor = torch.tensor(val)
-        avg_tensor = hvd.allreduce(tensor, name=name)
-        return avg_tensor.item()
 
     classification.eval()
     test_loss = 0.
@@ -62,12 +55,8 @@ def eval_epoch(args, config, _rank, classification: MovieClassification, test_lo
 
         test_loss += torch.nn.functional.nll_loss(logits, labels, size_average=False).item()
         test_accuracy += torch.eq(indices, labels).clone().detach().cpu().float().sum()
-    if args.horovod:
-        test_loss = metric_average(test_loss / len(test_sampler), 'avg_loss')
-        test_accuracy = metric_average(test_accuracy / len(test_sampler), 'avg_accuracy')
-    else:
-        test_loss /= len(labels)
-        test_accuracy /= len(labels)
+    test_loss /= len(labels)
+    test_accuracy /= len(labels)
     return test_loss, test_accuracy
 
 
@@ -103,13 +92,10 @@ def train_model(rank, world_size, args):
     """ 모델 학습 """
     master = (world_size == 0 or rank % world_size == 0)
     if master and args.wandb:
-        if args.horovod:
-            wandb.init(project=args.project, resume=args.name, tags=args.tags, reinit=True)
-        else:
-            wandb.init(project=args.project, resume=args.name, tags=args.tags)
+        wandb.init(project=args.project, resume=args.name, tags=args.tags)
 
-    if not args.horovod and 1 < args.n_gpu:
-        init_process_group(args, rank, world_size)
+    if 1 < args.n_gpu:
+        init_process_group(rank, world_size)
 
     vocab = load_vocab(args.vocab)
 
@@ -128,39 +114,22 @@ def train_model(rank, world_size, args):
     if master and args.wandb:
         wandb.watch(model)
 
+    if 1 < args.n_gpu:
+        model = DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
+
     criterion = torch.nn.CrossEntropyLoss()
 
     train_loader, train_sampler = data.build_data_loader(rank, vocab, os.path.abspath(os.path.join(os.getcwd(), args.data_dir, "ratings_train.json")), args, shuffle=True)
     test_loader, test_sampler = data.build_data_loader(rank, vocab, os.path.abspath(os.path.join(os.getcwd(), args.data_dir, "ratings_test.json")), args, shuffle=False)
 
-    t_total = len(train_loader) * args.epoch  # t_total=총 backward() 회수
-    if args.horovod:
-        lr_scaler = hvd.size() if not args.use_adasum else 1
-        if args.n_gpu > 0 and args.use_adasum and hvd.nccl_built():
-            lr_scaler = hvd.local_size()
-        optimizer = optim.SGD(model.parameters(), lr=args.learning_rate * lr_scaler)
-        # optimizer = optimization.AdamW(model.parameters(), lr=1.0e-3) # FIXME: not work
-        # optimizer = optim.Adam(model.parameters(), lr=args.learning_rate * lr_scaler, eps=args.adam_epsilon) # FIXME: not work
-        hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-        hvd.broadcast_optimizer_state(optimizer, root_rank=0)
-
-        compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
-        print('compression:', compression)
-        optimizer = hvd.DistributedOptimizer(optimizer, named_parameters=model.named_parameters(),
-                                             compression=compression, op=hvd.Adasum if args.use_adasum else hvd.Average,
-                                             device_dense='/cpu:0')
-
-        scheduler = optimization.WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
-    else:
-        if 1 < args.n_gpu:
-            model = DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
-        no_decay = ['bias', 'LayerNorm.weight']
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
-            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-        ]
-        optimizer = optimization.AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-        scheduler = optimization.get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total, last_epoch=best_epoch)
+    t_total = len(train_loader) * args.epoch
+    no_decay = ['bias', 'LayerNorm.weight']
+    optimizer_grouped_parameters = [
+        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
+        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
+    optimizer = optimization.AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    scheduler = optimization.get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total, last_epoch=best_epoch)
 
     print(f'total_memory: {torch.cuda.get_device_properties(rank).total_memory / (1024 * 1024):.3f} MB')
     with tqdm(initial=best_epoch + 1, total=args.epoch, position=0) as pbar:
@@ -169,7 +138,7 @@ def train_model(rank, world_size, args):
                 train_sampler.set_epoch(epoch)
 
             train_loss = train_epoch(args, config, rank, epoch, model, criterion, optimizer, scheduler, train_loader)
-            test_loss, test_accuracy = eval_epoch(args, config, rank, model, test_loader, test_sampler)
+            test_loss, test_accuracy = eval_epoch(config, rank, model, test_loader, test_sampler)
             if master and args.wandb:
                 wandb.config.update(args)
                 wandb.log(row={"train loss": train_loss, "accuracy": test_accuracy}, step=epoch)
@@ -192,7 +161,7 @@ def train_model(rank, world_size, args):
 
     if master and args.wandb:
         wandb.save(args.name)
-    if not args.horovod and 1 < args.n_gpu:
+    if 1 < args.n_gpu:
         destroy_process_group()
 
 
@@ -225,8 +194,6 @@ if __name__ == '__main__':
     parser.add_argument('--wandb', default=False, type=bool, required=False, help='logging to wandb or not')
     parser.add_argument('--project', default='transformer-evolution-bage', type=str, required=False, help='project name for wandb')
     parser.add_argument('--tags', default=['transformer'], type=list, required=False, help='tags for wandb')
-    parser.add_argument('--horovod', default=True if not IS_MAC else False, type=bool, required=False, help='using horovod or not')  # FIXME: TEST
-    parser.add_argument('--fp16_allreduce', default=False, type=bool, required=False, help='using mixed precision on horovod or not')  # FIXME: TEST
     parser.add_argument('--use_adasum', default=False, type=bool, required=False, help='Adasum algorithm for multiple GPUs.')
     parser.add_argument('--resume', default=False, type=bool, required=False, help='reuse last model state or create new model')
     args = parser.parse_args()
@@ -249,18 +216,9 @@ if __name__ == '__main__':
     set_seed(args)
 
     if 1 < args.n_gpu:
-        if args.horovod:
-            hvd.init()
-            print('hvd.local_rank():', hvd.local_rank())
-            print('hvd.rank():', hvd.rank())
-            torch.cuda.set_device(hvd.local_rank())
-            train_model(hvd.rank(), args.n_gpu, args)
-        else:
-            import torch.multiprocessing as mp
-
-            mp.spawn(train_model,
-                     args=(args.n_gpu, args),
-                     nprocs=args.n_gpu,
-                     join=True)
+        mp.spawn(train_model,
+                 args=(args.n_gpu, args),
+                 nprocs=args.n_gpu,
+                 join=True)
     else:
         train_model(0 if args.gpu is None else args.gpu, args.n_gpu, args)

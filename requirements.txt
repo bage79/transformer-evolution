@@ -4,4 +4,3 @@ tqdm
 wget
 sentencepiece
 wandb
-horovod
