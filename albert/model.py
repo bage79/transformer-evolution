@@ -1,12 +1,8 @@
-import numpy as np
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-""" attention pad mask """
 def get_attn_pad_mask(seq_q, seq_k, i_pad):
     batch_size, len_q = seq_q.size()
     batch_size, len_k = seq_k.size()
@@ -14,35 +10,31 @@ def get_attn_pad_mask(seq_q, seq_k, i_pad):
     return pad_attn_mask
 
 
-""" attention decoder mask """
 def get_attn_decoder_mask(seq):
     subsequent_mask = torch.ones_like(seq).unsqueeze(-1).expand(seq.size(0), seq.size(1), seq.size(1))
-    subsequent_mask = subsequent_mask.triu(diagonal=1) # upper triangular part of a matrix(2-D)
+    subsequent_mask = subsequent_mask.triu(diagonal=1)  # upper triangular part of a matrix(2-D)
     return subsequent_mask
 
 
-""" scale dot product attention """
 class ScaledDotProductAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.dropout = nn.Dropout(config.dropout)
         self.scale = 1 / (self.config.d_head ** 0.5)
-    
+
     def forward(self, Q, K, V, attn_mask):
-        # (bs, n_head, n_q_seq, n_k_seq)
+        # scores=(bs, n_head, n_enc_seq, n_enc_seq)
         scores = torch.matmul(Q, K.transpose(-1, -2)).mul_(self.scale)
         scores.masked_fill_(attn_mask, -1e9)
-        # (bs, n_head, n_q_seq, n_k_seq)
+        # attn_prob=(bs, n_head, n_enc_seq, n_enc_seq)=scores
         attn_prob = nn.Softmax(dim=-1)(scores)
         attn_prob = self.dropout(attn_prob)
-        # (bs, n_head, n_q_seq, d_v)
+        # context=(bs, n_head, n_enc_seq, d_head)=(bs, n_head, n_enc_seq, n_enc_seq) * (bs, n_head, ne_enc_seq, d_head)
         context = torch.matmul(attn_prob, V)
-        # (bs, n_head, n_q_seq, d_v), (bs, n_head, n_q_seq, n_v_seq)
         return context, attn_prob
 
 
-""" multi head attention """
 class MultiHeadAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -54,31 +46,32 @@ class MultiHeadAttention(nn.Module):
         self.scaled_dot_attn = ScaledDotProductAttention(self.config)
         self.linear = nn.Linear(self.config.n_head * self.config.d_head, self.config.d_hidn)
         self.dropout = nn.Dropout(config.dropout)
-    
+
     def forward(self, Q, K, V, attn_mask):
         batch_size = Q.size(0)
-        # (bs, n_head, n_q_seq, d_head)
-        q_s = self.W_Q(Q).view(batch_size, -1, self.config.n_head, self.config.d_head).transpose(1,2)
-        # (bs, n_head, n_k_seq, d_head)
-        k_s = self.W_K(K).view(batch_size, -1, self.config.n_head, self.config.d_head).transpose(1,2)
-        # (bs, n_head, n_v_seq, d_head)
-        v_s = self.W_V(V).view(batch_size, -1, self.config.n_head, self.config.d_head).transpose(1,2)
+        # q_s = (bs, n_head, n_enc_seq, d_head)
+        q_s = self.W_Q(Q).view(batch_size, -1, self.config.n_head, self.config.d_head).transpose(1, 2)
+        # k_s = (bs, n_head, n_enc_seq, d_head)
+        k_s = self.W_K(K).view(batch_size, -1, self.config.n_head, self.config.d_head).transpose(1, 2)
+        # v_s = (bs, n_head, n_v_seq, d_head)
+        v_s = self.W_V(V).view(batch_size, -1, self.config.n_head, self.config.d_head).transpose(1, 2)
 
-        # (bs, n_head, n_q_seq, n_k_seq)
+        # attn_mask = (bs, n_head, n_enc_seq, n_enc_seq)
         attn_mask = attn_mask.unsqueeze(1).repeat(1, self.config.n_head, 1, 1)
 
-        # (bs, n_head, n_q_seq, d_head), (bs, n_head, n_q_seq, n_k_seq)
+        # context = (bs, n_head, n_enc_seq, d_head), attn_prob = (bs, n_head, n_enc_seq, n_enc_seq)
         context, attn_prob = self.scaled_dot_attn(q_s, k_s, v_s, attn_mask)
-        # (bs, n_head, n_q_seq, h_head * d_head)
-        context = context.transpose(1, 2).contiguous().view(batch_size, -1, self.config.n_head * self.config.d_head)
-        # (bs, n_head, n_q_seq, e_embd)
-        output = self.linear(context)
+        # context = (bs, n_enc_seq, n_head, d_head)
+        context = context.transpose(1, 2).contiguous()
+        # context = (bs, n_enc_seq, n_head * d_head)
+        context = context.view(batch_size, -1, self.config.n_head * self.config.d_head)
+        # output = (bs, n_head, n_enc_seq, d_hidn)
+        output = self.linear(context)  # n_head * d_head -> d_hidn
         output = self.dropout(output)
-        # (bs, n_q_seq, d_hidn), (bs, n_head, n_q_seq, n_k_seq)
+        # output = (bs, n_enc_seq, d_hidn), attn_prob = (bs, n_head, n_enc_seq, n_enc_seq)
         return output, attn_prob
 
 
-""" feed forward """
 class PoswiseFeedForwardNet(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -90,16 +83,16 @@ class PoswiseFeedForwardNet(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, inputs):
-        # (bs, d_ff, n_seq)
-        output = self.active(self.conv1(inputs.transpose(1, 2)))
-        # (bs, n_seq, d_hidn)
+        # inputs=(bs, n_enc_seq, d_hidn)
+        # output=(bs, d_ff, n_enc_seq), inputs.transpose(1, 2)=(bs, d_hidn, n_enc_seq)
+        output = self.conv1(inputs.transpose(1, 2))
+        output = self.active(output)
+        # output=(bs, n_enc_seq, d_hidn)
         output = self.conv2(output).transpose(1, 2)
         output = self.dropout(output)
-        # (bs, n_seq, d_hidn)
         return output
 
 
-""" encoder layer """
 class EncoderLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -109,7 +102,7 @@ class EncoderLayer(nn.Module):
         self.layer_norm1 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
         self.pos_ffn = PoswiseFeedForwardNet(self.config)
         self.layer_norm2 = nn.LayerNorm(self.config.d_hidn, eps=self.config.layer_norm_epsilon)
-    
+
     def forward(self, inputs, attn_mask):
         # (bs, n_enc_seq, d_hidn), (bs, n_head, n_enc_seq, n_enc_seq)
         att_outputs, attn_prob = self.self_attn(inputs, inputs, inputs, attn_mask)
@@ -121,68 +114,84 @@ class EncoderLayer(nn.Module):
         return ffn_outputs, attn_prob
 
 
-""" encoder """
 class Encoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
 
-        self.enc_emb = nn.Embedding(self.config.n_enc_vocab, self.config.d_embd)
-        self.fectorize = nn.Linear(self.config.d_embd, self.config.d_hidn)
-        self.pos_emb = nn.Embedding(self.config.n_dec_seq + 1, self.config.d_hidn)
+        # V=n_enc_vocab, H=d_hidn, E=d_emb => ALBERT(V*E)*(E*H) = BERT(V*E)
+        self.enc_emb = nn.Embedding(self.config.n_enc_vocab, self.config.d_embd)  # (V*E)
+        self.factorize = nn.Linear(self.config.d_embd, self.config.d_hidn, bias=False)  # (E*H)
+        self.pos_emb = nn.Embedding(self.config.n_enc_seq + 1, self.config.d_hidn)
         self.seg_emb = nn.Embedding(self.config.n_seg_type, self.config.d_hidn)
 
         self.layer = EncoderLayer(self.config)
-    
+
     def forward(self, inputs, segments):
         positions = torch.arange(inputs.size(1), device=inputs.device, dtype=inputs.dtype).expand(inputs.size(0), inputs.size(1)).contiguous() + 1
         pos_mask = inputs.eq(self.config.i_pad)
+        # positions = (bs, n_enc_seq)
         positions.masked_fill_(pos_mask, 0)
 
-        # (bs, n_enc_seq, d_hidn)
-        outputs = self.fectorize(self.enc_emb(inputs)) + self.pos_emb(positions)  + self.seg_emb(segments)
+        # outputs = (bs, n_enc_seq, d_hidn)
+        outputs = self.factorize(self.enc_emb(inputs)) + self.pos_emb(positions) + self.seg_emb(segments)
 
-        # (bs, n_enc_seq, n_enc_seq)
+        # attn_mask = (bs, n_enc_seq, n_enc_seq)
         attn_mask = get_attn_pad_mask(inputs, inputs, self.config.i_pad)
 
         attn_probs = []
         for i in range(self.config.n_layer):
-            # (bs, n_enc_seq, d_hidn), (bs, n_head, n_enc_seq, n_enc_seq)
+            # outputs = (bs, n_enc_seq, d_hidn), attn_prob = (bs, n_head, n_enc_seq, n_enc_seq)
             outputs, attn_prob = self.layer(outputs, attn_mask)
             attn_probs.append(attn_prob)
-
-        # (bs, n_enc_seq, d_hidn), [(bs, n_head, n_enc_seq, n_enc_seq)]
+        # outputs = (bs, n_enc_seq, d_hidn), attn_probs = [(bs, n_head, n_enc_seq, n_enc_seq)]
         return outputs, attn_probs
 
 
-""" bert """
-class ALBERT(nn.Module):
+class PooledOutput(nn.Module):
+    """ huggingface's pooled output """
+
     def __init__(self, config):
         super().__init__()
-        self.config = config
+        self.linear = nn.Linear(config.d_hidn, config.d_hidn)
+        self.activation = torch.tanh
 
-        self.encoder = Encoder(self.config)
-    
+    def forward(self, inputs):
+        outputs_cls = self.linear(inputs)
+        outputs_cls = self.activation(outputs_cls)
+        return outputs_cls
+
+
+class ALBERT(nn.Module):
+    def __init__(self, config, use_pooled=True):
+        super().__init__()
+        self.encoder = Encoder(config)
+        self.use_pooled = use_pooled
+        if use_pooled:
+            self.pooled = PooledOutput(config)
+
     def forward(self, inputs, segments):
-        # (bs, n_seq, d_hidn), [(bs, n_head, n_dec_seq, n_dec_seq)]
         outputs, self_attn_probs = self.encoder(inputs, segments)
-        # (bs, n_dec_seq, n_dec_vocab), [(bs, n_head, n_dec_seq, n_dec_seq)]
-        return outputs, self_attn_probs
-    
+        if self.use_pooled:
+            outputs_cls = self.pooled(outputs[:, 0].contiguous())
+        else:
+            outputs_cls = outputs[:, 0].contiguous()
+        # outputs = (bs, n_enc_seq, d_hidn), outputs_cls = (bs, d_hidn), attn_probs = [(bs, n_head, n_enc_seq, n_enc_seq)]
+        return outputs, outputs_cls, self_attn_probs
+
     def save(self, epoch, loss, path):
         torch.save({
             "epoch": epoch,
             "loss": loss,
             "state_dict": self.state_dict()
         }, path)
-    
+
     def load(self, path):
         save = torch.load(path)
         self.load_state_dict(save["state_dict"])
         return save["epoch"], save["loss"]
 
 
-""" BERT pretrain """
 class ALBERTPretrain(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -190,26 +199,29 @@ class ALBERTPretrain(nn.Module):
 
         self.albert = ALBERT(self.config)
         # classfier
-        self.projection_cls = nn.Linear(self.config.d_hidn, 2, bias=False)
+        self.projection_cls = nn.Linear(self.config.d_hidn, 2)  # Sentence Order Prediction
         # lm
-        self.linear_lm = nn.Linear(self.config.d_hidn, self.config.d_embd)
-        self.projection_lm = nn.Linear(self.config.d_embd, self.config.n_dec_vocab, bias=False)
-        self.projection_lm.weight = self.albert.encoder.enc_emb.weight
-    
+        self.linear_lm = nn.Linear(self.config.d_hidn, self.config.d_embd, bias=False)
+        self.projection_lm = nn.Linear(self.config.d_embd, self.config.n_enc_vocab, bias=False)
+        with torch.no_grad():
+            self.linear_lm.weight.copy_(self.albert.encoder.factorize.weight.t())  # weight sharing
+            self.projection_lm.weight = self.albert.encoder.enc_emb.weight
+
     def forward(self, inputs, segments):
-        # (bs, n_dec_seq, d_hidn), [(bs, n_head, n_dec_seq, n_dec_seq)]
-        outputs, attn_probs = self.albert(inputs, segments)
-        # (bs, 2)
-        logits_cls = self.projection_cls(outputs[:, 0])
-        # (bs, n_dec_seq, n_dec_vocab)
+        # (bs, n_enc_seq, d_hidn), [(bs, n_head, n_enc_seq, n_enc_seq)]
+        outputs, outputs_cls, attn_probs = self.albert(inputs, segments)
+        # (bs, d_hidn)
+        logits_cls = self.projection_cls(outputs_cls)
+        # (bs, n_enc_seq, n_enc_vocab)
         outputs = self.linear_lm(outputs)
         logits_lm = self.projection_lm(outputs)
-        # (bs, n_dec_seq - 1, n_enc_vocab), (bs, n_output), [(bs, n_head, n_dec_seq, n_dec_seq)]
+        # (bs, n_enc_vocab), (bs, n_enc_seq, n_enc_vocab), [(bs, n_head, n_enc_seq, n_enc_seq)]
         return logits_cls, logits_lm, attn_probs
 
 
-""" naver movie classfication """
-class MovieClassification(nn.Module):
+class ALBertTrainMovie(nn.Module):
+    """ naver movie classfication """
+
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -217,17 +229,15 @@ class MovieClassification(nn.Module):
         self.albert = ALBERT(self.config)
         # classfier
         self.projection_cls = nn.Linear(self.config.d_hidn, self.config.n_output, bias=False)
-    
+
     def forward(self, inputs, segments):
-        # (bs, n_dec_seq, d_hidn), [(bs, n_head, n_dec_seq, n_dec_seq)]
-        output, attn_probs = self.albert(inputs, segments)
-        # (bs, d_hidn)
-        output = output[:, 0]
+        # (bs, n_enc_seq, d_hidn), [(bs, n_head, n_enc_seq, n_enc_seq)]
+        outputs, outputs_cls, attn_probs = self.albert(inputs, segments)
         # (bs, n_output)
-        logits_cls = self.projection_cls(output)
-        # (bs, n_output), [(bs, n_head, n_dec_seq, n_dec_seq)]
+        logits_cls = self.projection_cls(outputs_cls)
+        # (bs, n_output), [(bs, n_head, n_enc_seq, n_enc_seq)]
         return logits_cls, attn_probs
-    
+
     def save(self, epoch, loss, score, path):
         torch.save({
             "epoch": epoch,
@@ -235,9 +245,8 @@ class MovieClassification(nn.Module):
             "score": score,
             "state_dict": self.state_dict()
         }, path)
-    
+
     def load(self, path):
         save = torch.load(path)
         self.load_state_dict(save["state_dict"])
         return save["epoch"], save["loss"], save["score"]
-

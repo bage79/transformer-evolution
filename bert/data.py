@@ -1,17 +1,15 @@
-import sys
+import argparse
+import json
+import os
+from random import random, randrange, shuffle, choice
 
+import numpy as np
+import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-
-sys.path.append("..")
-import os, argparse
 from tqdm import tqdm
-import json
-from random import random, randrange, shuffle, choice
-import numpy as np
 
-import torch
-import config as cfg
+from config import is_mac_or_pycharm, Config
 from vocab import load_vocab
 
 
@@ -34,7 +32,6 @@ def create_pretrain_mask(tokens, mask_cnt, vocab_list):
         if len(mask_lms) + len(index_set) > mask_cnt:
             continue
         for index in index_set:
-            masked_token = None
             if random() < 0.8:  # 80% replace with [MASK]
                 masked_token = "[MASK]"
             else:
@@ -74,7 +71,7 @@ def create_pretrain_instances(docs, doc_idx, doc, n_seq, mask_prob, vocab_list):
     current_chunk = []
     current_length = 0
     for i in range(len(doc)):
-        current_chunk.append(doc[i])  # line
+        current_chunk.append(doc[i])  # 목표 길이 (tgt_seq=253)이 될때까지 문장을 추가함.
         current_length += len(doc[i])
         if i == len(doc) - 1 or current_length >= tgt_seq:
             if 0 < len(current_chunk):
@@ -127,15 +124,19 @@ def create_pretrain_instances(docs, doc_idx, doc, n_seq, mask_prob, vocab_list):
 
 def make_pretrain_data(args):
     """ pretrain 데이터 생성 """
+    if os.path.isfile(args.pretrain):
+        print(f"{args.pretrain} exists")
+        return
+
     vocab = load_vocab(args.vocab)
     vocab_list = [vocab.id_to_piece(wid) for wid in range(vocab.get_piece_size()) if not vocab.is_unknown(wid)]
 
     docs = []
-    with open(args.input, "r") as f:
+    with open(args.corpus, "r") as f:
         lines = f.read().splitlines()
 
         doc = []
-        for line in tqdm(lines, desc=f"Loading {args.input}"):
+        for line in tqdm(lines, desc=f"Loading {os.path.basename(args.corpus)}"):
             line = line.strip()
             if line == "":
                 if 0 < len(doc):
@@ -148,15 +149,13 @@ def make_pretrain_data(args):
         if 0 < len(doc):
             docs.append(doc)
 
-    for index in range(args.count):
-        output = args.output.format(index)
-        if not os.path.isfile(output):
-            with open(output, "w") as out_f:
-                for i, doc in enumerate(tqdm(docs, desc=f"Making {os.path.basename(output)}", unit=" lines")):
-                    instances = create_pretrain_instances(docs, i, doc, args.n_seq, args.mask_prob, vocab_list)
-                    for instance in instances:
-                        out_f.write(json.dumps(instance, ensure_ascii=False))
-                        out_f.write("\n")
+    with open(args.pretrain, "w") as out_f:
+        config = Config.load(args.config)
+        for i, doc in enumerate(tqdm(docs, desc=f"Making {os.path.basename(args.pretrain)}", unit=" lines")):
+            instances = create_pretrain_instances(docs, i, doc, config.n_enc_seq, config.mask_prob, vocab_list)
+            for instance in instances:
+                out_f.write(json.dumps(instance, ensure_ascii=False))
+                out_f.write("\n")
 
 
 class PretrainDataSet(torch.utils.data.Dataset):
@@ -169,13 +168,8 @@ class PretrainDataSet(torch.utils.data.Dataset):
         self.sentences = []
         self.segments = []
 
-        line_cnt = 0
         with open(infile, "r") as f:
-            for line in f:
-                line_cnt += 1
-
-        with open(infile, "r") as f:
-            for i, line in enumerate(tqdm(f, total=line_cnt, desc=f"Loading {infile}", unit=" lines")):
+            for line in tqdm(f.read().splitlines(), desc=f"Loading {os.path.basename(infile)}", unit=" lines", position=2, leave=False):
                 instance = json.loads(line)
                 self.labels_cls.append(instance["is_next"])
                 sentences = [vocab.piece_to_id(p) for p in instance["tokens"]]
@@ -188,9 +182,7 @@ class PretrainDataSet(torch.utils.data.Dataset):
                 self.labels_lm.append(label_lm)
 
     def __len__(self):
-        assert len(self.labels_cls) == len(self.labels_lm)
-        assert len(self.labels_cls) == len(self.sentences)
-        assert len(self.labels_cls) == len(self.segments)
+        assert len(self.labels_cls) == len(self.labels_lm) == len(self.sentences) == len(self.segments)
         return len(self.labels_cls)
 
     def __getitem__(self, item):
@@ -204,12 +196,13 @@ def pretrin_collate_fn(inputs):
     """ pretrain data collate_fn """
     labels_cls, labels_lm, inputs, segments = list(zip(*inputs))
 
+    labels_cls = torch.stack(labels_cls, dim=0)
     labels_lm = torch.nn.utils.rnn.pad_sequence(labels_lm, batch_first=True, padding_value=-1)
     inputs = torch.nn.utils.rnn.pad_sequence(inputs, batch_first=True, padding_value=0)
     segments = torch.nn.utils.rnn.pad_sequence(segments, batch_first=True, padding_value=0)
 
     batch = [
-        torch.stack(labels_cls, dim=0),
+        labels_cls,
         labels_lm,
         inputs,
         segments
@@ -217,22 +210,22 @@ def pretrin_collate_fn(inputs):
     return batch
 
 
-def build_pretrain_loader(vocab, args, epoch=0, shuffle=True):
+def build_pretrain_loader(vocab, args, shuffle=True) -> DataLoader:
     """ pretraun 데이터 로더 """
-    dataset = PretrainDataSet(vocab, args.input.format(epoch % args.count))
+    dataset = PretrainDataSet(vocab, args.pretrain)
     if 1 < args.n_gpu and shuffle:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, collate_fn=pretrin_collate_fn)
+        loader = DataLoader(dataset, batch_size=args.batch, sampler=sampler, collate_fn=pretrin_collate_fn)
     else:
         sampler = None
-        loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, shuffle=shuffle, collate_fn=pretrin_collate_fn)
+        loader = DataLoader(dataset, batch_size=args.batch, sampler=sampler, shuffle=shuffle, collate_fn=pretrin_collate_fn)
     return loader
 
 
 class MovieDataSet(torch.utils.data.Dataset):
     """ 영화 분류 데이터셋 """
 
-    def __init__(self, vocab, infile):
+    def __init__(self, vocab, infile, data_type):
         self.vocab = vocab
         self.labels = []
         self.sentences = []
@@ -244,7 +237,7 @@ class MovieDataSet(torch.utils.data.Dataset):
                 line_cnt += 1
 
         with open(infile, "r") as f:
-            for i, line in enumerate(tqdm(f, total=line_cnt, desc="Loading Dataset", unit=" lines")):
+            for i, line in enumerate(tqdm(f, total=line_cnt, desc=f"load {data_type}", unit=" lines")):
                 data = json.loads(line)
                 self.labels.append(data["label"])
                 sentence = [vocab.piece_to_id("[CLS]")] + [vocab.piece_to_id(p) for p in data["doc"]] + [vocab.piece_to_id("[SEP]")]
@@ -277,9 +270,9 @@ def movie_collate_fn(inputs):
     return batch
 
 
-def build_data_loader(vocab, infile, args, shuffle=True):
+def build_data_loader(vocab, infile, args, data_type='train', shuffle=True) -> DataLoader:
     """ 데이터 로더 """
-    dataset = MovieDataSet(vocab, infile)
+    dataset = MovieDataSet(vocab, infile, data_type)
     if 1 < args.n_gpu and shuffle:
         sampler = DistributedSampler(dataset)
         loader = DataLoader(dataset, batch_size=args.batch, sampler=sampler, collate_fn=movie_collate_fn)
@@ -287,32 +280,24 @@ def build_data_loader(vocab, infile, args, shuffle=True):
         sampler = None
         # noinspection PyTypeChecker
         loader = DataLoader(dataset, batch_size=args.batch, sampler=sampler, shuffle=shuffle, collate_fn=movie_collate_fn)
-    return loader, sampler
+    return loader
 
 
 if __name__ == '__main__':
+    data_dir = os.path.join(os.getcwd(), '../data') if not is_mac_or_pycharm() else os.path.join(os.getcwd(), '../data_sample')
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', default='../data' if not cfg.IS_MAC else '../data_sample', type=str, required=False,
+    parser.add_argument('--data_dir', default=data_dir, type=str, required=False,
                         help='a data directory which have downloaded, corpus text, vocab files.')
-    parser.add_argument("--input", default="kowiki.txt", type=str, required=False,
+    parser.add_argument("--corpus", default=os.path.join(data_dir, "kowiki.txt"), type=str, required=False,
                         help="input text file")
-    parser.add_argument("--output", default="kowiki_bert_{}.json", type=str, required=False,
+    parser.add_argument("--pretrain", default=os.path.join(data_dir, "kowiki.bert.json"), type=str, required=False,
                         help="output json file")
-    parser.add_argument("--vocab", default="kowiki.model", type=str, required=False,
+    parser.add_argument("--vocab", default=os.path.join(data_dir, "kowiki.model"), type=str, required=False,
                         help="vocab file")
 
-    parser.add_argument("--count", default=10, type=int, required=False,
-                        help="count of pretrain data")
-    parser.add_argument("--n_seq", default=256, type=int, required=False,
-                        help="sequence length")
-    parser.add_argument("--mask_prob", default=0.15, type=float, required=False,
-                        help="probility of mask")
+    parser.add_argument('--config', default='config_half.json' if not is_mac_or_pycharm() else 'config_min.json', type=str, required=False,
+                        help='config file')
     args = parser.parse_args()
-    args.input = os.path.join(os.getcwd(), args.data_dir, args.input)
-    args.output = os.path.join(os.getcwd(), args.data_dir, args.output)
-    args.vocab = os.path.join(os.getcwd(), args.data_dir, args.vocab)
 
-    if not os.path.isfile(args.output):
-        make_pretrain_data(args)
-    else:
-        print(f"{args.output} exists")
+    make_pretrain_data(args)

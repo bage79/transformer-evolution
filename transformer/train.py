@@ -13,7 +13,7 @@ from tqdm import tqdm
 import torch.multiprocessing as mp
 
 import optimization
-from config import IS_MAC, Config
+from config import Config, is_mac_or_pycharm
 from transformer import data
 from transformer import model as transformer
 from transformer.model import MovieClassification
@@ -167,17 +167,17 @@ def train_model(rank, world_size, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', default='../data' if not IS_MAC else '../data_sample', type=str, required=False,
+    parser.add_argument('--data_dir', default='../data' if not is_mac_or_pycharm() else '../data_sample', type=str, required=False,
                         help='a data directory which have downloaded, corpus text, vocab files.')
     parser.add_argument('--vocab', default='kowiki.model', type=str, required=False,
                         help='vocab file')
     parser.add_argument('--config', default='config_half.json', type=str, required=False,
                         help='config file')
-    parser.add_argument('--epoch', default=20 if not IS_MAC else 4, type=int, required=False,
+    parser.add_argument('--epoch', default=20 if not is_mac_or_pycharm() else 4, type=int, required=False,
                         help='max epoch')
     parser.add_argument('--gradient_accumulation', default=1, type=int, required=False,
                         help='real batch size = gradient_accumulation_steps * batch')
-    parser.add_argument('--batch', default=256 if not IS_MAC else 4, type=int, required=False,
+    parser.add_argument('--batch', default=256 if not is_mac_or_pycharm() else 4, type=int, required=False,
                         help='batch')  # batch=256 for Titan XP, batch=512 for V100
     parser.add_argument('--gpu', default=None, type=int, required=False,
                         help='GPU id to use.')
@@ -192,7 +192,7 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_steps', type=float, default=0, required=False,
                         help='warmup steps')
     parser.add_argument('--wandb', default=False, type=bool, required=False, help='logging to wandb or not')
-    parser.add_argument('--project', default='transformer-evolution-bage', type=str, required=False, help='project name for wandb')
+    parser.add_argument('--project', default='transformer/train', type=str, required=False, help='project name for wandb')
     parser.add_argument('--tags', default=['transformer'], type=list, required=False, help='tags for wandb')
     parser.add_argument('--use_adasum', default=False, type=bool, required=False, help='Adasum algorithm for multiple GPUs.')
     parser.add_argument('--resume', default=False, type=bool, required=False, help='reuse last model state or create new model')

@@ -6,7 +6,7 @@ import pandas as pd
 import wget
 from tqdm import tqdm
 
-from config import IS_MAC
+from config import is_mac_or_pycharm
 from vocab import load_vocab
 
 
@@ -64,7 +64,7 @@ def download_data(data_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default="data" if not IS_MAC else "data_sample", type=str, required=False,
+    parser.add_argument("--data_dir", default="data" if not is_mac_or_pycharm() else "data_sample", type=str, required=False,
                         help="a data directory which have downloaded, corpus text, vocab files.")
     args = parser.parse_args()
     args.data_dir = os.path.join(os.getcwd(), args.data_dir)
