@@ -11,7 +11,7 @@ pip install -r requirements.txt
 
 
 
-## pretrain data 준비
+## 원본 데이터(corpus) 준비
 - [web-crawler](https://github.com/paul-hyun/web-crawler)를 이용하세요.
 ```sh
 git clone https://github.com/paul-hyun/web-crawler.git
@@ -30,7 +30,7 @@ python vocab.py
 - 'kowiki.model', 'kowiki.vocab' vocab 관련한 두개의 파일을 생성 합니다.
 
 
-## data 생성
+## train/test data 생성
 - pretrain 및 train data를 모델에서 사용하기 좋은 형태로 미리 만들어 놓습니다.
 - 세부 처리는 각 모델에서 필요에 따라 처리 합니다.
 - [Naver Movie](https://movie.naver.com/movie/point/af/list.nhn) 데이터를 사용 했습니다.
