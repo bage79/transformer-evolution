@@ -1,16 +1,17 @@
 import sys
 
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+
 sys.path.append("..")
-import os, argparse, datetime, time, re, collections
-from tqdm import tqdm, trange
+import os, argparse
+from tqdm import tqdm
 import json
-from random import random, randrange, randint, shuffle, choice
+from random import random, randrange, shuffle, choice
 import numpy as np
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
+import config as cfg
 from vocab import load_vocab
 
 
@@ -127,20 +128,14 @@ def create_pretrain_instances(docs, doc_idx, doc, n_seq, mask_prob, vocab_list):
 def make_pretrain_data(args):
     """ pretrain 데이터 생성 """
     vocab = load_vocab(args.vocab)
-    vocab_list = []
-    for id in range(vocab.get_piece_size()):
-        if not vocab.is_unknown(id):
-            vocab_list.append(vocab.id_to_piece(id))
+    vocab_list = [vocab.id_to_piece(wid) for wid in range(vocab.get_piece_size()) if not vocab.is_unknown(wid)]
 
-    line_cnt = 0
-    with open(args.input, "r") as in_f:
-        for line in in_f:
-            line_cnt += 1
-    
     docs = []
     with open(args.input, "r") as f:
+        lines = f.read().splitlines()
+
         doc = []
-        for i, line in enumerate(tqdm(f, total=line_cnt, desc=f"Loading {args.input}", unit=" lines")):
+        for line in tqdm(lines, desc=f"Loading {args.input}"):
             line = line.strip()
             if line == "":
                 if 0 < len(doc):
@@ -150,19 +145,18 @@ def make_pretrain_data(args):
                 pieces = vocab.encode_as_pieces(line)
                 if 0 < len(pieces):
                     doc.append(pieces)
-        if doc:
+        if 0 < len(doc):
             docs.append(doc)
 
     for index in range(args.count):
         output = args.output.format(index)
-        if os.path.isfile(output): continue
-
-        with open(output, "w") as out_f:
-            for i, doc in enumerate(tqdm(docs, desc=f"Making {output}", unit=" lines")):
-                instances = create_pretrain_instances(docs, i, doc, args.n_seq, args.mask_prob, vocab_list)
-                for instance in instances:
-                    out_f.write(json.dumps(instance, ensure_ascii=False))
-                    out_f.write("\n")
+        if not os.path.isfile(output):
+            with open(output, "w") as out_f:
+                for i, doc in enumerate(tqdm(docs, desc=f"Making {os.path.basename(output)}", unit=" lines")):
+                    instances = create_pretrain_instances(docs, i, doc, args.n_seq, args.mask_prob, vocab_list)
+                    for instance in instances:
+                        out_f.write(json.dumps(instance, ensure_ascii=False))
+                        out_f.write("\n")
 
 
 class PretrainDataSet(torch.utils.data.Dataset):
@@ -287,32 +281,38 @@ def build_data_loader(vocab, infile, args, shuffle=True):
     """ 데이터 로더 """
     dataset = MovieDataSet(vocab, infile)
     if 1 < args.n_gpu and shuffle:
-        sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, collate_fn=movie_collate_fn)
+        sampler = DistributedSampler(dataset)
+        loader = DataLoader(dataset, batch_size=args.batch, sampler=sampler, collate_fn=movie_collate_fn)
     else:
         sampler = None
-        loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch, sampler=sampler, shuffle=shuffle, collate_fn=movie_collate_fn)
+        # noinspection PyTypeChecker
+        loader = DataLoader(dataset, batch_size=args.batch, sampler=sampler, shuffle=shuffle, collate_fn=movie_collate_fn)
     return loader, sampler
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="../data/kowiki.txt", type=str, required=False,
+    parser.add_argument('--data_dir', default='../data' if not cfg.IS_MAC else '../data_sample', type=str, required=False,
+                        help='a data directory which have downloaded, corpus text, vocab files.')
+    parser.add_argument("--input", default="kowiki.txt", type=str, required=False,
                         help="input text file")
-    parser.add_argument("--output", default="../data/kowiki_bert_{}.json", type=str, required=False,
+    parser.add_argument("--output", default="kowiki_bert_{}.json", type=str, required=False,
                         help="output json file")
+    parser.add_argument("--vocab", default="kowiki.model", type=str, required=False,
+                        help="vocab file")
+
     parser.add_argument("--count", default=10, type=int, required=False,
                         help="count of pretrain data")
     parser.add_argument("--n_seq", default=256, type=int, required=False,
                         help="sequence length")
-    parser.add_argument("--vocab", default="../kowiki.model", type=str, required=False,
-                        help="vocab file")
     parser.add_argument("--mask_prob", default=0.15, type=float, required=False,
                         help="probility of mask")
     args = parser.parse_args()
+    args.input = os.path.join(os.getcwd(), args.data_dir, args.input)
+    args.output = os.path.join(os.getcwd(), args.data_dir, args.output)
+    args.vocab = os.path.join(os.getcwd(), args.data_dir, args.vocab)
 
     if not os.path.isfile(args.output):
         make_pretrain_data(args)
     else:
         print(f"{args.output} exists")
-

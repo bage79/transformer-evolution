@@ -16,8 +16,10 @@ def prepare_pretrain(vocab, infile, outfile):
     docs = []
     with open(infile, "r") as f:
         lines = f.read().splitlines()
+
         doc = []
         for line in tqdm(lines, desc=f"load {os.path.basename(infile)}"):
+            line = line.strip()
             if line == "":
                 if doc:
                     docs.append(doc)
