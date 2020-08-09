@@ -66,7 +66,7 @@ class MultiHeadAttention(nn.Module):
         # context = (bs, n_enc_seq, n_head * d_head)
         context = context.view(batch_size, -1, self.config.n_head * self.config.d_head)
         # output = (bs, n_head, n_enc_seq, d_hidn)
-        output = self.linear(context)
+        output = self.linear(context)  # n_head * d_head -> d_hidn
         output = self.dropout(output)
         # output = (bs, n_enc_seq, d_hidn), attn_prob = (bs, n_head, n_enc_seq, n_enc_seq)
         return output, attn_prob

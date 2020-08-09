@@ -6,3 +6,4 @@ data/*
 */pretrain_save
 */save
 */wandb
+*/.ipynb_checkpoints/

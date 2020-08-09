@@ -201,8 +201,8 @@ class ALBERTPretrain(nn.Module):
         # classfier
         self.projection_cls = nn.Linear(self.config.d_hidn, 2)  # Sentence Order Prediction
         # lm
-        self.linear_lm = nn.Linear(self.config.d_hidn, self.config.d_embd, bias=False)
         self.projection_lm = nn.Linear(self.config.d_embd, self.config.n_enc_vocab, bias=False)
+        self.linear_lm = nn.Linear(self.config.d_hidn, self.config.d_embd, bias=False)
         with torch.no_grad():
             self.linear_lm.weight.copy_(self.albert.encoder.factorize.weight.t())  # weight sharing
             self.projection_lm.weight = self.albert.encoder.enc_emb.weight
